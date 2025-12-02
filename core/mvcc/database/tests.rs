@@ -1633,3 +1633,25 @@ fn test_cursor_with_btree_and_mvcc_2() {
     assert_eq!(rows[1], vec![Value::Integer(2)]);
     assert_eq!(rows[2], vec![Value::Integer(3)]);
 }
+
+
+#[test]
+fn test_rowid_packing_roundtrip() {
+    // Test with negative table_id (schema and user tables)
+    let original = RowID::new(MVTableId(-1), 42);
+    let packed: u128 = original.into();
+    let unpacked = RowID::from(packed);
+    assert_eq!(original, unpacked);
+
+    // Test with positive row_id
+    let original2 = RowID::new(MVTableId(-2), i64::MAX);
+    let packed2: u128 = original2.into();
+    let unpacked2 = RowID::from(packed2);
+    assert_eq!(original2, unpacked2);
+
+    // Test boundary values
+    let original3 = RowID::new(MVTableId(i64::MIN), 0);
+    let packed3: u128 = original3.into();
+    let unpacked3 = RowID::from(packed3);
+    assert_eq!(original3, unpacked3);
+}

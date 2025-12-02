@@ -1,6 +1,6 @@
 use crate::mvcc::clock::LogicalClock;
 use crate::mvcc::database::{
-    DeleteRowStateMachine, MVTableId, MvStore, RowVersion, TxTimestampOrID, WriteRowStateMachine,
+    DeleteRowStateMachine, MVTableId, MvStore, RowID, RowVersion, TxTimestampOrID, WriteRowStateMachine,
     SQLITE_SCHEMA_MVCC_TABLE_ID,
 };
 use crate::state_machine::{StateMachine, StateTransition, TransitionResult};
@@ -156,7 +156,8 @@ impl<Clock: LogicalClock> CheckpointStateMachine<Clock> {
         // Since table ids are negative, and we want schema changes (table_id=-1) to be processed first, we iterate in reverse order.
         // Reliance on SkipMap ordering is a bit yolo-swag fragile, but oh well.
         for entry in self.mvstore.rows.iter().rev() {
-            let key = entry.key();
+            // OLD: let key = entry.key();
+            let key = RowID::from(*entry.key());
             if self.destroyed_tables.contains(&key.table_id) {
                 // We won't checkpoint rows for tables that will be destroyed in this checkpoint.
                 // There's two forms of destroyed table:
