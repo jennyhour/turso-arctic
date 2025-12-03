@@ -1386,7 +1386,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         // OLD: row: crossbeam_skiplist::map::Entry<'_, RowID, parking_lot::lock_api::RwLock<...>>,
         row: (
             u128,
-            &parking_lot::lock_api::RwLock<parking_lot::RawRwLock, Vec<RowVersion>>,
+            parking_lot::lock_api::RwLock<parking_lot::RawRwLock, Vec<RowVersion>>,
         ),
     ) -> Option<RowID> {
         row.1
@@ -1409,6 +1409,36 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         let tx = self.txs.get(&tx_id).unwrap();
         let tx = tx.value();
 
+        /*
+         * OLD (RowID-keyed SkipMap path):
+         *
+         * let table_id_expect = match bound {
+         *     Bound::Included(rowid) | Bound::Excluded(rowid) => rowid.table_id,
+         *     Bound::Unbounded => unreachable!(),
+         * };
+         *
+         * let res = if lower_bound {
+         *     self.rows
+         *         .lower_bound(bound)
+         *         .and_then(|entry| self.find_last_visible_version(tx, entry))
+         * } else {
+         *     self.rows
+         *         .upper_bound(bound)
+         *         .and_then(|entry| self.find_last_visible_version(tx, entry))
+         * };
+         *
+         * tracing::trace!(
+         *     "seek_rowid(bound={:?}, lower_bound={}, found={:?})",
+         *     bound,
+         *     lower_bound,
+         *     res
+         * );
+         *
+         * res.filter(|&rowid| rowid.table_id == table_id_expect)
+         */
+
+        // --- NEW (u128-packed SkipMap path) ---
+        // Convert Bound<&RowID> to Bound<&u128> by packing the key once per branch
         let (packed, table_id_expect, is_included) = match bound {
             Bound::Included(rowid) => (u128::from(*rowid), rowid.table_id, true),
             Bound::Excluded(rowid) => (u128::from(*rowid), rowid.table_id, false),
@@ -1450,7 +1480,6 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             lower_bound,
             res
         );
-
         res.filter(|&rowid| rowid.table_id == table_id_expect)
     }
 
