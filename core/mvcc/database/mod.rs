@@ -1386,7 +1386,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         // OLD: row: crossbeam_skiplist::map::Entry<'_, RowID, parking_lot::lock_api::RwLock<...>>,
         row: (
             u128,
-            parking_lot::lock_api::RwLock<parking_lot::RawRwLock, Vec<RowVersion>>,
+            &parking_lot::lock_api::RwLock<parking_lot::RawRwLock, Vec<RowVersion>>,
         ),
     ) -> Option<RowID> {
         row.1
