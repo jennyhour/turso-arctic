@@ -1409,7 +1409,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         let tx = self.txs.get(&tx_id).unwrap();
         let tx = tx.value();
 
-        let (packed, _table_id_expect, is_included) = match bound {
+        let (packed, table_id_expect, is_included) = match bound {
             Bound::Included(rowid) => (u128::from(*rowid), rowid.table_id, true),
             Bound::Excluded(rowid) => (u128::from(*rowid), rowid.table_id, false),
             Bound::Unbounded => unreachable!(),
@@ -1450,11 +1450,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             lower_bound,
             res
         );
-        let table_id_expect = match bound {
-            Bound::Included(rowid) => rowid.table_id,
-            Bound::Excluded(rowid) => rowid.table_id,
-            Bound::Unbounded => unreachable!(),
-        };
+
         res.filter(|&rowid| rowid.table_id == table_id_expect)
     }
 
