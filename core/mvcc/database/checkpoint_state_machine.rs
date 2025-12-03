@@ -155,7 +155,8 @@ impl<Clock: LogicalClock> CheckpointStateMachine<Clock> {
 
         // Since table ids are negative, and we want schema changes (table_id=-1) to be processed first, we iterate in reverse order.
         // Reliance on SkipMap ordering is a bit yolo-swag fragile, but oh well.
-        for (key_u128, versions) in self.mvstore.rows.pin().all().entries::<true>() {
+        let mut rows = self.mvstore.rows.pin();
+        for (key_u128, versions) in rows.all().entries::<true>() {
             // OLD: let key = entry.key();
             let key = RowID::from(key_u128);
             if self.destroyed_tables.contains(&key.table_id) {

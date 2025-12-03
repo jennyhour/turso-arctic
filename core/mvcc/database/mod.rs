@@ -598,7 +598,8 @@ impl<Clock: LogicalClock> StateTransition for CommitStateMachine<Clock> {
                      // if let Some(row_versions) = mvcc_store.rows.get(id) {
                     // NEW: rows SkipMap is keyed by packed u128 RowID
                     let packed_id = u128::from(*id);
-                    if let Some(row_versions) = mvcc_store.rows.pin().get(packed_id) {
+                    let mut rows = mvcc_store.rows.pin();
+                    if let Some(row_versions) = rows.get(packed_id) {
                         let mut row_versions = row_versions.write();
                         for row_version in row_versions.iter_mut() {
                             if let Some(TxTimestampOrID::TxID(id)) = row_version.begin {
@@ -632,7 +633,7 @@ impl<Clock: LogicalClock> StateTransition for CommitStateMachine<Clock> {
                                 }
                             }
                         }
-                    }
+                    };
                 }
                 tracing::trace!("updated(tx_id={})", self.tx_id);
 
@@ -1295,7 +1296,8 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         //     .into_iter()
         //     .for_each(|(key, value)| bucket.push(RowID::from(*key)));
 
-        if let Some(prefix) = self.rows.pin().range(start_id, end_id) {
+        let mut rows = self.rows.pin();
+        if let Some(prefix) = rows.range(start_id, end_id) {
             prefix
                 .entries::<false>()
                 .take(max_items as usize)
@@ -1653,7 +1655,8 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         for rowid in &tx.write_set {
             let rowid = rowid.value();
             // OLD: if let Some(row_versions) = self.rows.get(rowid) {
-            if let Some(row_versions) = self.rows.pin().get(u128::from(*rowid)) {
+            let mut rows = self.rows.pin();
+            if let Some(row_versions) = rows.get(u128::from(*rowid)) {
                 let mut row_versions = row_versions.write();
                 // Find rows that were written by this transaction.
                 // Hekaton uses oldest-to-newest order for row versions, so we reverse iterate to find the newest one
@@ -1678,7 +1681,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
                         row_version.end = Some(TxTimestampOrID::Timestamp(end_ts));
                     }
                 }
-            }
+            };
         }
     }
 
@@ -1705,8 +1708,9 @@ impl<Clock: LogicalClock> MvStore<Clock> {
 
         for rowid in &tx.write_set {
             let rowid = rowid.value();
+            let mut rows = self.rows.pin();
             // OLD: if let Some(row_versions) = self.rows.get(rowid) {
-            if let Some(row_versions) = self.rows.pin().get(u128::from(*rowid)) {
+            if let Some(row_versions) = rows.get(u128::from(*rowid)) {
                 let mut row_versions = row_versions.write();
                 for rv in row_versions.iter_mut() {
                     if let Some(TxTimestampOrID::TxID(id)) = rv.begin {
@@ -1722,7 +1726,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
                         rv.end = None;
                     }
                 }
-            }
+            };
         }
 
         if connection.schema.read().schema_version
