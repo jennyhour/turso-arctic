@@ -155,9 +155,10 @@ impl<Clock: LogicalClock> CheckpointStateMachine<Clock> {
 
         // Since table ids are negative, and we want schema changes (table_id=-1) to be processed first, we iterate in reverse order.
         // Reliance on SkipMap ordering is a bit yolo-swag fragile, but oh well.
-        for entry in self.mvstore.rows.iter().rev() {
+        let mut rows = self.mvstore.rows.pin();
+        for (key_u128, versions) in rows.all().entries::<true>() {
             // OLD: let key = entry.key();
-            let key = RowID::from(*entry.key());
+            let key = RowID::from(key_u128);
             if self.destroyed_tables.contains(&key.table_id) {
                 // We won't checkpoint rows for tables that will be destroyed in this checkpoint.
                 // There's two forms of destroyed table:
@@ -166,7 +167,7 @@ impl<Clock: LogicalClock> CheckpointStateMachine<Clock> {
                 continue;
             }
 
-            let row_versions = entry.value().read();
+            let row_versions = versions.read();
 
             let mut version_to_checkpoint = None;
             let mut exists_in_db_file = false;

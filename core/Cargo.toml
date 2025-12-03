@@ -35,17 +35,19 @@ test_helper = []
 
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = { version = "0.7.5", optional = true }
-libc = { version = "0.2.172" }
+libc = { version = "0.2.176" }
 
 [target.'cfg(target_family = "unix")'.dependencies]
 polling = "3.7.4"
 rustix = { version = "1.0.5", features = ["fs"] }
-libc = { version = "0.2.172" }
+libc = { version = "0.2.176" }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 libloading = "0.8.6"
 
 [dependencies]
+ribbit = { git = "https://github.com/nwtnni/ribbit", default-features = true, features = ["portable-u128"] }
+arctic = { git = "ssh://git@github.com/nwtnni/arctic.git" }
 antithesis_sdk = { workspace = true, optional = true }
 turso_ext = { workspace = true, features = ["core_only"] }
 cfg_block = "0.1.1"
