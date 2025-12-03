@@ -38,6 +38,9 @@ exclude = [
     "perf/latency/limbo",
 ]
 
+[patch.crates-io]
+portable-atomic = { git = "https://github.com/taiki-e/portable-atomic", tag = "v1.11.1" }
+
 [workspace.package]
 version = "0.4.0-pre.2"
 authors = ["the Limbo authors"]

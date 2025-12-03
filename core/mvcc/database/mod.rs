@@ -598,8 +598,8 @@ impl<Clock: LogicalClock> StateTransition for CommitStateMachine<Clock> {
                      // if let Some(row_versions) = mvcc_store.rows.get(id) {
                     // NEW: rows SkipMap is keyed by packed u128 RowID
                     let packed_id = u128::from(*id);
-                    if let Some(row_versions) = mvcc_store.rows.get(&packed_id) {
-                        let mut row_versions = row_versions.value().write();
+                    if let Some(row_versions) = mvcc_store.rows.pin().get(packed_id) {
+                        let mut row_versions = row_versions.write();
                         for row_version in row_versions.iter_mut() {
                             if let Some(TxTimestampOrID::TxID(id)) = row_version.begin {
                                 if id == self.tx_id {
@@ -935,10 +935,11 @@ impl DeleteRowStateMachine {
 pub const SQLITE_SCHEMA_MVCC_TABLE_ID: MVTableId = MVTableId(-1);
 
 /// A multi-version concurrency control database.
-#[derive(Debug)]
+// #[derive(Debug)]
 pub struct MvStore<Clock: LogicalClock> {
     // OLD: rows: SkipMap<RowID, RwLock<Vec<RowVersion>>>,
-    rows: SkipMap<u128, RwLock<Vec<RowVersion>>>,
+    // rows: SkipMap<u128, RwLock<Vec<RowVersion>>>,
+    rows: arctic::concurrent::Map<u128, Box<RwLock<Vec<RowVersion>>>>,
     /// Table ID is an opaque identifier that is only meaningful to the MV store.
     /// Each checkpointed MVCC table corresponds to a single B-tree on the pager,
     /// which naturally has a root page.
@@ -992,7 +993,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     /// Creates a new database.
     pub fn new(clock: Clock, storage: Storage) -> Self {
         Self {
-            rows: SkipMap::new(),
+            rows: arctic::concurrent::Map::new(),
             table_id_to_rootpage: SkipMap::from_iter(vec![(SQLITE_SCHEMA_MVCC_TABLE_ID, Some(1))]), // table id 1 / root page 1 is always sqlite_schema.
             txs: SkipMap::new(),
             tx_ids: AtomicU64::new(1), // let's reserve transaction 0 for special purposes
@@ -1180,9 +1181,10 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     pub fn delete(&self, tx_id: TxID, id: RowID) -> Result<bool> {
         tracing::trace!("delete(tx_id={}, id={:?})", tx_id, id);
         // OLD: let row_versions_opt = self.rows.get(&id);
-        let row_versions_opt = self.rows.get(&u128::from(id));
+        let mut rows = self.rows.pin();
+        let row_versions_opt = rows.get(u128::from(id));
         if let Some(ref row_versions) = row_versions_opt {
-            let mut row_versions = row_versions.value().write();
+            let mut row_versions = row_versions.write();
             for rv in row_versions.iter_mut().rev() {
                 let tx = self
                     .txs
@@ -1236,8 +1238,9 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         let tx = tx.value();
         assert_eq!(tx.state, TransactionState::Active);
         // OLD: if let Some(row_versions) = self.rows.get(&id) {
-        if let Some(row_versions) = self.rows.get(&u128::from(id)) {
-            let row_versions = row_versions.value().read();
+        let mut rows = self.rows.pin();
+        if let Some(row_versions) = rows.get(u128::from(id)) {
+            let row_versions = row_versions.read();
             if let Some(rv) = row_versions
                 .iter()
                 .rev()
@@ -1254,7 +1257,9 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     pub fn scan_row_ids(&self) -> Result<Vec<RowID>> {
         tracing::trace!("scan_row_ids");
         // OLD: let keys = self.rows.iter().map(|entry| *entry.key());
-        let keys = self.rows.iter().map(|entry| RowID::from(*entry.key()));
+        let mut binding = self.rows.pin();
+        let rows = binding.all();
+        let keys = rows.entries::<false>().map(|(row_id, _)| RowID::from(row_id));
         Ok(keys.collect())
     }
 
@@ -1282,11 +1287,21 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             row_id: i64::MAX,
         }.into();
 
-        self.rows
-            .range(start_id..end_id)
-            .take(max_items as usize)
-            // OLD: .for_each(|entry| bucket.push(*entry.key()));
-            .for_each(|entry| bucket.push(RowID::from(*entry.key())));
+        // self.rows
+        //     .pin()
+        //     .range(start_id, end_id)
+        //     .take()
+        //     // OLD: .for_each(|entry| bucket.push(*entry.key()));
+        //     .into_iter()
+        //     .for_each(|(key, value)| bucket.push(RowID::from(*key)));
+
+        if let Some(prefix) = self.rows.pin().range(start_id, end_id) {
+            prefix
+                .entries::<false>()
+                .take(max_items as usize)
+                // OLD: .for_each(|entry| bucket.push(*entry.key()));
+                .for_each(|(key, _value)| bucket.push(RowID::from(key)) );
+        }
 
         Ok(())
     }
@@ -1302,6 +1317,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             table_id,
             start,
         );
+        let mut rows = self.rows.pin();
         // OLD: let min_bound = RowID { table_id, row_id: start };
         let min_bound: u128 = RowID {
             table_id,
@@ -1316,7 +1332,8 @@ impl<Clock: LogicalClock> MvStore<Clock> {
 
         let tx = self.txs.get(&tx_id).unwrap();
         let tx = tx.value();
-        let mut rows = self.rows.range(min_bound..max_bound);
+        let rows = rows.range(min_bound, max_bound)?;
+        let mut rows = rows.entries::<false>();
         loop {
             // We are moving forward, so if a row was deleted we just need to skip it. Therefore, we need
             // to loop either until we find a row that is not deleted or until we reach the end of the table.
@@ -1346,12 +1363,13 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         let tx = self.txs.get(&tx_id).unwrap();
         let tx = tx.value();
         // OLD: let versions = self.rows.get(&RowID { table_id, row_id });
-        let versions = self.rows.get(&u128::from(RowID { table_id, row_id }));
+        let mut rows = self.rows.pin();
+        let versions = rows.get(u128::from(RowID { table_id, row_id }));
         if versions.is_none() {
             return RowVersionState::NotFound;
         }
         let versions = versions.unwrap();
-        let versions = versions.value().read();
+        let versions = versions.read();
         let last_version = versions.last().unwrap();
         if last_version.is_visible_to(tx, &self.txs) {
             RowVersionState::LiveVersion
@@ -1364,19 +1382,18 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         &self,
         tx: &Transaction,
         // OLD: row: crossbeam_skiplist::map::Entry<'_, RowID, parking_lot::lock_api::RwLock<...>>,
-        row: crossbeam_skiplist::map::Entry<
-            '_,
+        row: (
             u128,
-            parking_lot::lock_api::RwLock<parking_lot::RawRwLock, Vec<RowVersion>>,
-        >,
+            &parking_lot::lock_api::RwLock<parking_lot::RawRwLock, Vec<RowVersion>>,
+        ),
     ) -> Option<RowID> {
-        row.value()
+        row.1
             .read()
             .iter()
             .rev()
             .find(|version| version.is_visible_to(tx, &self.txs))
             // OLD: .map(|_| *row.key())
-            .map(|_| RowID::from(*row.key()))
+            .map(|_| RowID::from(row.0))
     }
 
     pub fn seek_rowid(
@@ -1390,73 +1407,52 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         let tx = self.txs.get(&tx_id).unwrap();
         let tx = tx.value();
 
-        /*
-         * OLD (RowID-keyed SkipMap path):
-         *
-         * let table_id_expect = match bound {
-         *     Bound::Included(rowid) | Bound::Excluded(rowid) => rowid.table_id,
-         *     Bound::Unbounded => unreachable!(),
-         * };
-         *
-         * let res = if lower_bound {
-         *     self.rows
-         *         .lower_bound(bound)
-         *         .and_then(|entry| self.find_last_visible_version(tx, entry))
-         * } else {
-         *     self.rows
-         *         .upper_bound(bound)
-         *         .and_then(|entry| self.find_last_visible_version(tx, entry))
-         * };
-         *
-         * tracing::trace!(
-         *     "seek_rowid(bound={:?}, lower_bound={}, found={:?})",
-         *     bound,
-         *     lower_bound,
-         *     res
-         * );
-         *
-         * res.filter(|&rowid| rowid.table_id == table_id_expect)
-         */
-
-        // --- NEW (u128-packed SkipMap path) ---
-        // Convert Bound<&RowID> to Bound<&u128> by packing the key once per branch
-        let mut packed_storage: Option<u128> = None;
-        let (packed_bound, table_id_expect) = match bound {
-            Bound::Included(rowid) => {
-                packed_storage = Some(u128::from(*rowid));
-                (
-                    Bound::Included(packed_storage.as_ref().unwrap()),
-                    rowid.table_id,
-                )
-            }
-            Bound::Excluded(rowid) => {
-                packed_storage = Some(u128::from(*rowid));
-                (
-                    Bound::Excluded(packed_storage.as_ref().unwrap()),
-                    rowid.table_id,
-                )
-            }
+        let (packed, _table_id_expect, is_included) = match bound {
+            Bound::Included(rowid) => (u128::from(*rowid), rowid.table_id, true),
+            Bound::Excluded(rowid) => (u128::from(*rowid), rowid.table_id, false),
             Bound::Unbounded => unreachable!(),
         };
-        
-        // OLD: self.rows.lower_bound(bound) / self.rows.upper_bound(bound)
+
+        let mut rows = self.rows.pin();
         let res = if lower_bound {
-            self.rows
-            //  .lower_bound(bound)
-                .lower_bound(packed_bound)
-                .and_then(|entry| self.find_last_visible_version(tx, entry))
+            rows
+                .range(packed, u128::MAX)
+                .and_then(|prefix| {
+                    let mut iter = prefix.entries::<false>();
+                    let mut entry = iter.next()?;
+
+                    if !is_included && entry.0 == packed {
+                        entry = iter.next()?;
+                    }
+
+                    self.find_last_visible_version(tx, entry)
+                })
         } else {
-            self.rows
-            // .upper_bound(bound)
-                .upper_bound(packed_bound)
-                .and_then(|entry| self.find_last_visible_version(tx, entry))
+            rows
+                .range(0u128, packed)
+                .and_then(|prefix| {
+                    let mut iter = prefix.entries::<true>();
+                    let mut entry = iter.next()?;
+
+                    if !is_included && entry.0 == packed {
+                        entry = iter.next()?;
+                    }
+
+                    self.find_last_visible_version(tx, entry)
+                })
         };
+
         tracing::trace!(
             "seek_rowid(bound={:?}, lower_bound={}, found={:?})",
             bound,
             lower_bound,
             res
         );
+        let table_id_expect = match bound {
+            Bound::Included(rowid) => rowid.table_id,
+            Bound::Excluded(rowid) => rowid.table_id,
+            Bound::Unbounded => unreachable!(),
+        };
         res.filter(|&rowid| rowid.table_id == table_id_expect)
     }
 
@@ -1657,8 +1653,8 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         for rowid in &tx.write_set {
             let rowid = rowid.value();
             // OLD: if let Some(row_versions) = self.rows.get(rowid) {
-            if let Some(row_versions) = self.rows.get(&u128::from(*rowid)) {
-                let mut row_versions = row_versions.value().write();
+            if let Some(row_versions) = self.rows.pin().get(u128::from(*rowid)) {
+                let mut row_versions = row_versions.write();
                 // Find rows that were written by this transaction.
                 // Hekaton uses oldest-to-newest order for row versions, so we reverse iterate to find the newest one
                 // this transaction changed.
@@ -1710,8 +1706,8 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         for rowid in &tx.write_set {
             let rowid = rowid.value();
             // OLD: if let Some(row_versions) = self.rows.get(rowid) {
-            if let Some(row_versions) = self.rows.get(&u128::from(*rowid)) {
-                let mut row_versions = row_versions.value().write();
+            if let Some(row_versions) = self.rows.pin().get(u128::from(*rowid)) {
+                let mut row_versions = row_versions.write();
                 for rv in row_versions.iter_mut() {
                     if let Some(TxTimestampOrID::TxID(id)) = rv.begin {
                         assert_eq!(id, tx_id);
@@ -1804,15 +1800,22 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     /// which sometimes leaves versions intact for too long.
     /// Returns the number of removed versions.
     pub fn drop_unused_row_versions(&self) -> usize {
+        /* OLD (with len() call)
         tracing::trace!(
             "drop_unused_row_versions() -> txs: {}; rows: {}",
             self.txs.len(),
             self.rows.len()
         );
+        */
+        tracing::trace!(
+            "drop_unused_row_versions() -> txs: {};",
+            self.txs.len(),
+        );
         let mut dropped = 0;
         let mut to_remove = Vec::new();
-        for entry in self.rows.iter() {
-            let mut row_versions = entry.value().write();
+        let mut rows = self.rows.pin();
+        for (row_id, versions) in rows.all().entries::<false>() {
+            let mut row_versions = versions.write();
             row_versions.retain(|rv| {
                 // FIXME: should take rv.begin into account as well
                 let should_stay = match rv.end {
@@ -1842,7 +1845,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
                     tracing::trace!(
                         "Dropping row version {:?} {:?}-{:?}",
                         // OLD: entry.key(),
-                        RowID::from(*entry.key()),
+                        RowID::from(row_id),
                         rv.begin,
                         rv.end
                     );
@@ -1850,11 +1853,11 @@ impl<Clock: LogicalClock> MvStore<Clock> {
                 should_stay
             });
             if row_versions.is_empty() {
-                to_remove.push(*entry.key());
+                to_remove.push(row_id);
             }
         }
         for id in to_remove {
-            self.rows.remove(&id);
+            rows.remove(id);
         }
         dropped
     }
@@ -1894,8 +1897,9 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     /// the row version is inserted in the correct order.
     fn insert_version(&self, id: RowID, row_version: RowVersion) {
         // OLD: let versions = self.rows.get_or_insert_with(id, || RwLock::new(Vec::new()));
-        let versions = self.rows.get_or_insert_with(u128::from(id), || RwLock::new(Vec::new()));
-        let mut versions = versions.value().write();
+        let mut rows = self.rows.pin();
+        let (versions, _) = rows.get_or_insert_with(u128::from(id), || Box::new(RwLock::new(Vec::new())));
+        let mut versions = versions.write();
         self.insert_version_raw(&mut versions, row_version)
     }
 
@@ -1965,14 +1969,18 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             table_id,
             row_id: i64::MAX,
         });
+
+        let mut rows = self.rows.pin();
         // OLD: self.rows.upper_bound(Bound::Included(&RowID { table_id, row_id: i64::MAX }))
-        let last_rowid = self
-            .rows
-            .upper_bound(Bound::Included(&packed))
-            // OLD: .map(|entry| Some(entry.key().row_id))
-            .map(|entry| Some(RowID::from(*entry.key()).row_id))
-            .unwrap_or(None);
-        last_rowid
+        rows
+            .range(0u128, packed)
+            .and_then(|prefix| {
+                let mut iter = prefix.entries::<true>();
+                let (key, _value) = iter.next()?;
+
+                let rowid = RowID::from(key);
+                Some(rowid.row_id)
+            })
     }
 
     pub fn get_logical_log_file(&self) -> Arc<dyn File> {
