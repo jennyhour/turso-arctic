@@ -1325,6 +1325,9 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         );
         println!("get next row id for table");
         let mut rows = self.rows.pin();
+        for (k, _v) in rows.all().entries::<false>() {
+            println!("  row in map: {:?}", RowID::from(k));
+        }
         // OLD: let min_bound = RowID { table_id, row_id: start };
         let min_bound: u128 = RowID {
             table_id,
@@ -1339,13 +1342,16 @@ impl<Clock: LogicalClock> MvStore<Clock> {
 
         let tx = self.txs.get(&tx_id).unwrap();
         let tx = tx.value();
+        println!("got here");
         let rows = rows.range(min_bound, max_bound)?;
+        println!("got after");
         let mut rows = rows.entries::<false>();
         loop {
             // We are moving forward, so if a row was deleted we just need to skip it. Therefore, we need
             // to loop either until we find a row that is not deleted or until we reach the end of the table.
             let next_row = rows.next();
             let row = next_row?;
+            println!("next row");
 
             // We found a row, let's check if it's visible to the transaction.
             if let Some(visible_row) = self.find_last_visible_version(tx, row) {
