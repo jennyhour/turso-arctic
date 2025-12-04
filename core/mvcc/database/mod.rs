@@ -1181,6 +1181,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     ///
     pub fn delete(&self, tx_id: TxID, id: RowID) -> Result<bool> {
         tracing::trace!("delete(tx_id={}, id={:?})", tx_id, id);
+        println!("delete function");
         // OLD: let row_versions_opt = self.rows.get(&id);
         let mut rows = self.rows.pin();
         let row_versions_opt = rows.get(u128::from(id));
@@ -1234,6 +1235,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     /// Returns `Some(row)` with the row data if the row with the given `id` exists,
     /// and `None` otherwise.
     pub fn read(&self, tx_id: TxID, id: RowID) -> Result<Option<Row>> {
+        println!("read function");
         tracing::trace!("read(tx_id={}, id={:?})", tx_id, id);
         let tx = self.txs.get(&tx_id).unwrap();
         let tx = tx.value();
@@ -1257,6 +1259,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     /// Gets all row ids in the database.
     pub fn scan_row_ids(&self) -> Result<Vec<RowID>> {
         tracing::trace!("scan_row_ids");
+        println!("scan row ids");
         // OLD: let keys = self.rows.iter().map(|entry| *entry.key());
         let mut binding = self.rows.pin();
         let rows = binding.all();
@@ -1271,6 +1274,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         bucket: &mut Vec<RowID>,
         max_items: u64,
     ) -> Result<()> {
+        println!("get row id range");
         tracing::trace!(
             "get_row_id_in_range(table_id={}, range_start={})",
             table_id,
@@ -1319,6 +1323,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             table_id,
             start,
         );
+        println!("get next row id for table");
         let mut rows = self.rows.pin();
         // OLD: let min_bound = RowID { table_id, row_id: start };
         let min_bound: u128 = RowID {
@@ -1361,6 +1366,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             table_id,
             row_id,
         );
+        println!("find_row_last_version_state");
 
         let tx = self.txs.get(&tx_id).unwrap();
         let tx = tx.value();
@@ -1389,6 +1395,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             &parking_lot::lock_api::RwLock<parking_lot::RawRwLock, Vec<RowVersion>>,
         ),
     ) -> Option<RowID> {
+        println!("find_last_visible_version");
         row.1
             .read()
             .iter()
@@ -1405,6 +1412,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         tx_id: TxID,
     ) -> Option<RowID> {
         tracing::trace!("seek_rowid(bound={:?}, lower_bound={})", bound, lower_bound,);
+        println!("seek rowid function");
 
         let tx = self.txs.get(&tx_id).unwrap();
         let tx = tx.value();
@@ -1674,6 +1682,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     /// This will simply mark timestamps of row version correctly so they are now visible to new
     /// transactions.
     pub fn commit_load_tx(&self, tx_id: TxID) {
+        println!("commit load tx");
         let end_ts = self.get_timestamp();
         let tx = self.txs.get(&tx_id).unwrap();
         let tx = tx.value();
@@ -1719,6 +1728,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     ///
     /// * `tx_id` - The ID of the transaction to abort.
     pub fn rollback_tx(&self, tx_id: TxID, _pager: Arc<Pager>, connection: &Connection) {
+        println!("rollback tx function");
         let tx_unlocked = self.txs.get(&tx_id).unwrap();
         let tx = tx_unlocked.value();
         *connection.mv_tx.write() = None;
@@ -1836,6 +1846,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             self.rows.len()
         );
         */
+        println!("drop_unused_row_versions");
         tracing::trace!(
             "drop_unused_row_versions() -> txs: {};",
             self.txs.len(),
@@ -1926,6 +1937,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     /// the row version is inserted in the correct order.
     fn insert_version(&self, id: RowID, row_version: RowVersion) {
         // OLD: let versions = self.rows.get_or_insert_with(id, || RwLock::new(Vec::new()));
+        println!("insert version functino");
         let mut rows = self.rows.pin();
         let (versions, _) = rows.get_or_insert_with(u128::from(id), || Box::new(RwLock::new(Vec::new())));
         let mut versions = versions.write();
@@ -1994,6 +2006,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             // }))
             // .map(|entry| Some(entry.key().row_id))
         // Pack RowID into u128 for upper_bound query
+        println!("get_last_rowid");
         let packed = u128::from(RowID {
             table_id,
             row_id: i64::MAX,
