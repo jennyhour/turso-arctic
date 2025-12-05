@@ -1411,6 +1411,17 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             .map(|_| RowID::from(row.0))
     }
 
+    pub fn contains(&self, id: RowID, tx_id: TxID) -> bool {
+        let tx = self.txs.get(&tx_id).unwrap();
+        let tx = tx.value();
+
+        let id = u128::from(id);
+        let mut rows = self.rows.pin();
+        rows.get(id)
+            .and_then(|row| self.find_last_visible_version(tx, (id, &row)))
+            .is_some()
+    }
+
     pub fn seek_rowid(
         &self,
         bound: Bound<&RowID>,
