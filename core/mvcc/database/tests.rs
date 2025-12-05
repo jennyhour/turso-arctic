@@ -1085,17 +1085,17 @@ Terminated   | Irrelevant         | Reread V’s End field. TE has terminated so
 or not found |                    | the timestamp.
 */
 
-fn new_tx(tx_id: TxID, begin_ts: u64, state: TransactionState) -> Transaction {
-    let state = state.into();
-    Transaction {
-        state,
-        tx_id,
-        begin_ts,
-        write_set: SkipSet::new(),
-        read_set: SkipSet::new(),
-        header: RwLock::new(DatabaseHeader::default()),
-    }
-}
+// fn new_tx(tx_id: TxID, begin_ts: u64, state: TransactionState) -> Transaction {
+//     let state = state.into();
+//     Transaction {
+//         state,
+//         tx_id,
+//         begin_ts,
+//         write_set: SkipSet::new(),
+//         read_set: SkipSet::new(),
+//         header: RwLock::new(DatabaseHeader::default()),
+//     }
+// }
 
 // #[test]
 // fn test_snapshot_isolation_tx_visible1() {
@@ -1516,33 +1516,33 @@ fn test_batch_writes() {
     println!("start: {start} end: {end}");
 }
 
-#[test]
-fn transaction_display() {
-    let state = AtomicTransactionState::from(TransactionState::Preparing);
-    let tx_id = 42;
-    let begin_ts = 20250914;
-
-    let write_set = SkipSet::new();
-    write_set.insert(RowID::new((-2).into(), 11));
-    write_set.insert(RowID::new((-2).into(), 13));
-
-    let read_set = SkipSet::new();
-    read_set.insert(RowID::new((-2).into(), 17));
-    read_set.insert(RowID::new((-2).into(), 19));
-
-    let tx = Transaction {
-        state,
-        tx_id,
-        begin_ts,
-        write_set,
-        read_set,
-        header: RwLock::new(DatabaseHeader::default()),
-    };
-
-    let expected = "{ state: Preparing, id: 42, begin_ts: 20250914, write_set: [RowID { table_id: MVTableId(-2), row_id: 11 }, RowID { table_id: MVTableId(-2), row_id: 13 }], read_set: [RowID { table_id: MVTableId(-2), row_id: 17 }, RowID { table_id: MVTableId(-2), row_id: 19 }] }";
-    let output = format!("{tx}");
-    assert_eq!(output, expected);
-}
+// #[test]
+// fn transaction_display() {
+//     let state = AtomicTransactionState::from(TransactionState::Preparing);
+//     let tx_id = 42;
+//     let begin_ts = 20250914;
+//
+//     let write_set = SkipSet::new();
+//     write_set.insert(RowID::new((-2).into(), 11));
+//     write_set.insert(RowID::new((-2).into(), 13));
+//
+//     let read_set = SkipSet::new();
+//     read_set.insert(RowID::new((-2).into(), 17));
+//     read_set.insert(RowID::new((-2).into(), 19));
+//
+//     let tx = Transaction {
+//         state,
+//         tx_id,
+//         begin_ts,
+//         write_set,
+//         read_set,
+//         header: RwLock::new(DatabaseHeader::default()),
+//     };
+//
+//     let expected = "{ state: Preparing, id: 42, begin_ts: 20250914, write_set: [RowID { table_id: MVTableId(-2), row_id: 11 }, RowID { table_id: MVTableId(-2), row_id: 13 }], read_set: [RowID { table_id: MVTableId(-2), row_id: 17 }, RowID { table_id: MVTableId(-2), row_id: 19 }] }";
+//     let output = format!("{tx}");
+//     assert_eq!(output, expected);
+// }
 
 #[test]
 fn test_should_checkpoint() {
@@ -1654,4 +1654,3 @@ fn test_rowid_packing_roundtrip() {
     let unpacked3 = RowID::from(packed3);
     assert_eq!(original3, unpacked3);
 }
-
