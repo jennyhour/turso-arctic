@@ -1329,34 +1329,36 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             println!("  row in map: {:?}", RowID::from(k));
         }
         // OLD: let min_bound = RowID { table_id, row_id: start };
-        let min_key: u128 = RowID {
+        let min_bound: u128 = RowID {
             table_id,
             row_id: start,
         }.into();
 
+        // OLD: let max_bound = RowID { table_id, row_id: i64::MAX };
+        let max_bound: u128 = RowID {
+            table_id,
+            row_id: i64::MAX,
+        }.into();
+
         let tx = self.txs.get(&tx_id).unwrap();
         let tx = tx.value();
+        println!("got here");
+        let rows = rows.range(min_bound, max_bound)?;
+        println!("got after");
+        let mut rows = rows.entries::<false>();
+        loop {
+            // We are moving forward, so if a row was deleted we just need to skip it. Therefore, we need
+            // to loop either until we find a row that is not deleted or until we reach the end of the table.
+            let next_row = rows.next();
+            let row = next_row?;
+            println!("next row");
 
-        println!("going into for loop");
-        for (k, versions) in rows.all().entries::<false>() {
-            let rid = RowID::from(k);
-
-            if k < min_key {
-                continue;
-            }
-
-            if rid.table_id != table_id {
-                break;
-            }
-
-            let row = (k, versions);
-
+            // We found a row, let's check if it's visible to the transaction.
             if let Some(visible_row) = self.find_last_visible_version(tx, row) {
                 return Some(visible_row);
             }
+            // If this row is not visible, continue to the next row
         }
-
-        None
     }
 
     pub fn find_row_last_version_state(
