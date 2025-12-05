@@ -148,7 +148,6 @@ impl<Clock: LogicalClock> CheckpointStateMachine<Clock> {
     ///    * The row is a delete AND it exists in the database file already.
     ///      If the row didn't exist in the database file and was deleted, we can simply not write it.
     fn collect_committed_versions(&mut self) {
-        println!("collect commited versions");
         // Keep track of the highest timestamp that will be checkpointed in the current checkpoint;
         // This value will be used at the end of the checkpoint to update the corresponding value in
         // the MVCC store, so that we don't checkpoint the same row versions again on the next checkpoint.
@@ -619,7 +618,6 @@ impl<Clock: LogicalClock> StateTransition for CheckpointStateMachine<Clock> {
     type SMResult = CheckpointResult;
 
     fn step(&mut self, _context: &Self::Context) -> Result<TransitionResult<Self::SMResult>> {
-        println!("step function");
         let res = self.step_inner(&());
         match res {
             Err(err) => {
