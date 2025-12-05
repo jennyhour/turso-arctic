@@ -228,10 +228,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e16d2d3311acee920a9eb8d33b8cbc1787ce4a264e85f964c2404b969bdcd487"
 
 [[package]]
+name = "arbitrary-int"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c858caffa49edfc4ecc45a4bec37abd3e88041a2903816f10f990b7b41abc281"
+
+[[package]]
 name = "arc-swap"
 version = "1.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69f7f8c3906b62b754cd5326047894316021dcfe5a194c8ea52bdd94934a3457"
+
+[[package]]
+name = "arctic"
+version = "0.1.0"
+source = "git+ssh://git@github.com/nwtnni/arctic.git#24230c111c599daff93a7abc11c5c72b33d0ebfd"
+dependencies = [
+ "libc",
+ "polonius-the-crab",
+ "ribbit",
+ "thread_local 1.1.9",
+]
 
 [[package]]
 name = "arrayref"
@@ -768,7 +785,7 @@ dependencies = [
  "prost-types",
  "serde",
  "serde_json",
- "thread_local",
+ "thread_local 1.1.8",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -1934,6 +1951,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
+name = "higher-kinded-types"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "561985554c8b8d4808605c90a5f1979cc6c31a5d20b78465cd59501233c6678e"
+dependencies = [
+ "never-say-never",
+]
+
+[[package]]
 name = "home"
 version = "0.5.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2498,9 +2524,9 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "libc"
-version = "0.2.172"
+version = "0.2.178"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
+checksum = "37c93d8daa9d8a012fd8ab92f088405fb202ea0b6ab73ee2482ae66af4f42091"
 
 [[package]]
 name = "libgit2-sys"
@@ -2952,6 +2978,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "never-say-never"
+version = "6.6.666"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf5a574dadd7941adeaa71823ecba5e28331b8313fb2e1c6a5c7e5981ea53ad6"
+
+[[package]]
 name = "nibble_vec"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3324,6 +3356,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "polonius-the-crab"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e97ca2c89572ae41bbec1c99498251f87dd5a94e500c5ec19c382dd593dd5ce9"
+dependencies = [
+ "higher-kinded-types",
+ "never-say-never",
+]
+
+[[package]]
 name = "polyval"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3337,9 +3379,8 @@ dependencies = [
 
 [[package]]
 name = "portable-atomic"
-version = "1.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "350e9b48cbc6b0e028b0473b114454c6316e57336ee184ceab6e53f72c178b3e"
+version = "1.11.1"
+source = "git+https://github.com/taiki-e/portable-atomic?tag=v1.11.1#83c438260f4bf58043120a4457d11cf6e6746ffb"
 
 [[package]]
 name = "powerfmt"
@@ -3802,6 +3843,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57397d16646700483b67d2dd6511d79318f9d057fdbd21a4066aeac8b41d310a"
 dependencies = [
  "bytemuck",
+]
+
+[[package]]
+name = "ribbit"
+version = "0.1.0"
+source = "git+https://github.com/nwtnni/ribbit#ad77f21ddcf57a7a4ddc431bff6dcea7feccb746"
+dependencies = [
+ "arbitrary-int",
+ "ribbit-derive",
+]
+
+[[package]]
+name = "ribbit-derive"
+version = "0.1.0"
+source = "git+https://github.com/nwtnni/ribbit#ad77f21ddcf57a7a4ddc431bff6dcea7feccb746"
+dependencies = [
+ "darling",
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.100",
 ]
 
 [[package]]
@@ -4554,6 +4616,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "thread_local"
+version = "1.1.9"
+source = "git+https://github.com/nwtnni/thread_local-rs.git#33f151b641a1b099b440c062bacb1237a194a454"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "threadpool"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4854,7 +4924,7 @@ dependencies = [
  "regex-automata",
  "sharded-slab",
  "smallvec",
- "thread_local",
+ "thread_local 1.1.8",
  "tracing",
  "tracing-core",
  "tracing-log",
@@ -4935,6 +5005,7 @@ dependencies = [
  "aes-gcm",
  "antithesis_sdk",
  "arc-swap",
+ "arctic",
  "bitflags 2.9.4",
  "built",
  "bytemuck",
@@ -4965,6 +5036,7 @@ dependencies = [
  "rand_chacha 0.9.0",
  "regex",
  "regex-syntax",
+ "ribbit",
  "roaring",
  "rstest",
  "rusqlite",

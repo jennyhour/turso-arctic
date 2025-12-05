@@ -7,6 +7,8 @@ LIBSQLITE3_FLAGS = "-DSQLITE_ENABLE_MATH_FUNCTIONS" # necessary for rusqlite dep
 # so, we set this cfg globally for workspace (see relevant issue build build-target: https://github.com/rust-lang/cargo/issues/7004)
 rustflags = [
     "--cfg=tokio_unstable",
+    "-C",
+    "target-cpu=native",
 ]
 
 
@@ -29,6 +31,8 @@ rustflags = [
   "link-args=-Wl,--warn-unresolved-symbols",
   "-C",
   "link-args=-Wl,-z,nodelete",
+  "-C",
+  "target-cpu=native",
 ]
 
 # To be able to run unit tests on Windows, support compilation to 'x86_64-pc-windows-msvc'.

@@ -46,7 +46,7 @@ libc = { version = "0.2.176" }
 libloading = "0.8.6"
 
 [dependencies]
-ribbit = { git = "https://github.com/nwtnni/ribbit", default-features = true, features = ["portable-u128"] }
+ribbit = { git = "https://github.com/nwtnni/ribbit", default-features = false }
 arctic = { git = "ssh://git@github.com/nwtnni/arctic.git" }
 antithesis_sdk = { workspace = true, optional = true }
 turso_ext = { workspace = true, features = ["core_only"] }
