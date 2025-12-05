@@ -100,7 +100,7 @@ impl From<RowID> for u128 {
     fn from(row_id: RowID) -> Self {
         const SIGN: u64 = 1u64 << 63;
         let hi = ((row_id.table_id.0 as u64) ^ SIGN) as u128; // table_id (i64) -> u64 with sign flip
-        let lo = ((row_id.row_id as u64) ^ SIGN) as u128;     // row_id (i64) -> u64 with sign flip
+        let lo = ((row_id.row_id as u64) ^ SIGN) as u128; // row_id (i64) -> u64 with sign flip
         (hi << 64) | lo
     }
 }
@@ -109,9 +109,8 @@ impl From<u128> for RowID {
     fn from(packed: u128) -> Self {
         const SIGN: u64 = 1u64 << 63;
         let hi = ((packed >> 64) as u64) ^ SIGN; // undo sign flip
-        let lo = (packed as u64) ^ SIGN;         // undo sign flip
+        let lo = (packed as u64) ^ SIGN; // undo sign flip
         RowID::new(MVTableId(hi as i64), lo as i64)
-
     }
 }
 
@@ -594,8 +593,8 @@ impl<Clock: LogicalClock> StateTransition for CommitStateMachine<Clock> {
                     return Err(LimboError::WriteWriteConflict);
                 }
                 for id in &self.write_set {
-                     // OLD (RowID-keyed SkipMap path):
-                     // if let Some(row_versions) = mvcc_store.rows.get(id) {
+                    // OLD (RowID-keyed SkipMap path):
+                    // if let Some(row_versions) = mvcc_store.rows.get(id) {
                     // NEW: rows SkipMap is keyed by packed u128 RowID
                     let packed_id = u128::from(*id);
                     let mut rows = mvcc_store.rows.pin();
@@ -1260,7 +1259,9 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         // OLD: let keys = self.rows.iter().map(|entry| *entry.key());
         let mut binding = self.rows.pin();
         let rows = binding.all();
-        let keys = rows.entries::<false>().map(|(row_id, _)| RowID::from(row_id));
+        let keys = rows
+            .entries::<false>()
+            .map(|(row_id, _)| RowID::from(row_id));
         Ok(keys.collect())
     }
 
@@ -1280,13 +1281,15 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         let start_id: u128 = RowID {
             table_id,
             row_id: start,
-        }.into();
+        }
+        .into();
 
         // OLD: let end_id = RowID { table_id, row_id: i64::MAX };
         let end_id: u128 = RowID {
             table_id,
             row_id: i64::MAX,
-        }.into();
+        }
+        .into();
 
         // self.rows
         //     .pin()
@@ -1302,7 +1305,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
                 .entries::<false>()
                 .take(max_items as usize)
                 // OLD: .for_each(|entry| bucket.push(*entry.key()));
-                .for_each(|(key, _value)| bucket.push(RowID::from(key)) );
+                .for_each(|(key, _value)| bucket.push(RowID::from(key)));
         }
 
         Ok(())
@@ -1324,13 +1327,15 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         let min_bound: u128 = RowID {
             table_id,
             row_id: start,
-        }.into();
+        }
+        .into();
 
         // OLD: let max_bound = RowID { table_id, row_id: i64::MAX };
         let max_bound: u128 = RowID {
             table_id,
             row_id: i64::MAX,
-        }.into();
+        }
+        .into();
 
         let tx = self.txs.get(&tx_id).unwrap();
         let tx = tx.value();
@@ -1458,31 +1463,27 @@ impl<Clock: LogicalClock> MvStore<Clock> {
 
         let mut rows = self.rows.pin();
         let res = if lower_bound {
-            rows
-                .range(packed, u128::MAX)
-                .and_then(|prefix| {
-                    let mut iter = prefix.entries::<false>();
-                    let mut entry = iter.next()?;
+            rows.range(packed, u128::MAX).and_then(|prefix| {
+                let mut iter = prefix.entries::<false>();
+                let mut entry = iter.next()?;
 
-                    if !is_included && entry.0 == packed {
-                        entry = iter.next()?;
-                    }
+                if !is_included && entry.0 == packed {
+                    entry = iter.next()?;
+                }
 
-                    self.find_last_visible_version(tx, entry)
-                })
+                self.find_last_visible_version(tx, entry)
+            })
         } else {
-            rows
-                .range(0u128, packed)
-                .and_then(|prefix| {
-                    let mut iter = prefix.entries::<true>();
-                    let mut entry = iter.next()?;
+            rows.range(0u128, packed).and_then(|prefix| {
+                let mut iter = prefix.entries::<true>();
+                let mut entry = iter.next()?;
 
-                    if !is_included && entry.0 == packed {
-                        entry = iter.next()?;
-                    }
+                if !is_included && entry.0 == packed {
+                    entry = iter.next()?;
+                }
 
-                    self.find_last_visible_version(tx, entry)
-                })
+                self.find_last_visible_version(tx, entry)
+            })
         };
 
         tracing::trace!(
@@ -1847,10 +1848,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             self.rows.len()
         );
         */
-        tracing::trace!(
-            "drop_unused_row_versions() -> txs: {};",
-            self.txs.len(),
-        );
+        tracing::trace!("drop_unused_row_versions() -> txs: {};", self.txs.len(),);
         let mut dropped = 0;
         let mut to_remove = Vec::new();
         let mut rows = self.rows.pin();
@@ -1938,7 +1936,8 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     fn insert_version(&self, id: RowID, row_version: RowVersion) {
         // OLD: let versions = self.rows.get_or_insert_with(id, || RwLock::new(Vec::new()));
         let mut rows = self.rows.pin();
-        let (versions, _) = rows.get_or_insert_with(u128::from(id), || Box::new(RwLock::new(Vec::new())));
+        let (versions, _) =
+            rows.get_or_insert_with(u128::from(id), || Box::new(RwLock::new(Vec::new())));
         let mut versions = versions.write();
         self.insert_version_raw(&mut versions, row_version)
     }
@@ -1998,12 +1997,12 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     pub fn get_last_rowid(&self, table_id: MVTableId) -> Option<i64> {
         // OLD:
         // let last_rowid = self
-            //.rows
-            //.upper_bound(Bound::Included(&RowID {
-            //  table_id,
-            // row_id: i64::MAX,
-            // }))
-            // .map(|entry| Some(entry.key().row_id))
+        //.rows
+        //.upper_bound(Bound::Included(&RowID {
+        //  table_id,
+        // row_id: i64::MAX,
+        // }))
+        // .map(|entry| Some(entry.key().row_id))
         // Pack RowID into u128 for upper_bound query
         let packed = u128::from(RowID {
             table_id,
@@ -2012,15 +2011,13 @@ impl<Clock: LogicalClock> MvStore<Clock> {
 
         let mut rows = self.rows.pin();
         // OLD: self.rows.upper_bound(Bound::Included(&RowID { table_id, row_id: i64::MAX }))
-        rows
-            .range(0u128, packed)
-            .and_then(|prefix| {
-                let mut iter = prefix.entries::<true>();
-                let (key, _value) = iter.next()?;
+        rows.range(0u128, packed).and_then(|prefix| {
+            let mut iter = prefix.entries::<true>();
+            let (key, _value) = iter.next()?;
 
-                let rowid = RowID::from(key);
-                Some(rowid.row_id)
-            })
+            let rowid = RowID::from(key);
+            Some(rowid.row_id)
+        })
     }
 
     pub fn get_logical_log_file(&self) -> Arc<dyn File> {
