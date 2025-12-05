@@ -179,6 +179,7 @@ pub enum TxTimestampOrID {
 }
 
 /// Transaction
+#[derive(Debug)]
 pub struct Transaction {
     /// The state of the transaction.
     state: AtomicTransactionState,
@@ -187,9 +188,9 @@ pub struct Transaction {
     /// The transaction begin timestamp.
     begin_ts: u64,
     /// The transaction write set.
-    write_set: arctic::concurrent::Map<u128, u64>,
+    write_set: SkipSet<RowID>,
     /// The transaction read set.
-    read_set: arctic::concurrent::Map<u128, u64>,
+    read_set: SkipSet<RowID>,
     /// The transaction header.
     header: RwLock<DatabaseHeader>,
 }
@@ -200,20 +201,18 @@ impl Transaction {
             state: TransactionState::Active.into(),
             tx_id,
             begin_ts,
-            write_set: arctic::concurrent::Map::new(),
-            read_set: arctic::concurrent::Map::new(),
+            write_set: SkipSet::new(),
+            read_set: SkipSet::new(),
             header: RwLock::new(header),
         }
     }
 
     fn insert_to_read_set(&self, id: RowID) {
-        let mut read_set = self.read_set.pin();
-        read_set.upsert(id.into(), 0);
+        self.read_set.insert(id);
     }
 
     fn insert_to_write_set(&self, id: RowID) {
-        let mut write_set = self.write_set.pin();
-        write_set.upsert(id.into(), 0);
+        self.write_set.insert(id);
     }
 }
 
@@ -227,20 +226,20 @@ impl std::fmt::Display for Transaction {
             self.begin_ts,
         )?;
 
-        // for (i, v) in self.write_set.iter().enumerate() {
-        //     if i > 0 {
-        //         write!(f, ", ")?
-        //     }
-        //     write!(f, "{:?}", *v.value())?;
-        // }
-        //
-        // write!(f, "], read_set: [")?;
-        // for (i, v) in self.read_set.iter().enumerate() {
-        //     if i > 0 {
-        //         write!(f, ", ")?;
-        //     }
-        //     write!(f, "{:?}", *v.value())?;
-        // }
+        for (i, v) in self.write_set.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?
+            }
+            write!(f, "{:?}", *v.value())?;
+        }
+
+        write!(f, "], read_set: [")?;
+        for (i, v) in self.read_set.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{:?}", *v.value())?;
+        }
 
         write!(f, "] }}")
     }
@@ -565,14 +564,8 @@ impl<Clock: LogicalClock> StateTransition for CommitStateMachine<Clock> {
                     """
                 */
                 tracing::trace!("commit_tx(tx_id={})", self.tx_id);
-
-                {
-                    let mut ws = tx.write_set.pin();
-                    let ws = ws.all();
-                    self.write_set
-                        .extend(ws.entries::<false>().map(|(rowid, _)| RowID::from(rowid)));
-                }
-
+                self.write_set
+                    .extend(tx.write_set.iter().map(|v| *v.value()));
                 self.write_set.sort_by(|a, b| {
                     // table ids are negative, and sqlite_schema has id -1 so we want to sort in descending order of table id
                     b.table_id.cmp(&a.table_id).then(a.row_id.cmp(&b.row_id))
@@ -1006,12 +999,10 @@ pub struct MvStore<Clock: LogicalClock> {
 impl<Clock: LogicalClock> MvStore<Clock> {
     /// Creates a new database.
     pub fn new(clock: Clock, storage: Storage) -> Self {
-        let rows = arctic::concurrent::Map::new();
-        let txs = arctic::concurrent::Map::new();
         Self {
-            rows,
+            rows: arctic::concurrent::Map::new(),
             table_id_to_rootpage: SkipMap::from_iter(vec![(SQLITE_SCHEMA_MVCC_TABLE_ID, Some(1))]), // table id 1 / root page 1 is always sqlite_schema.
-            txs,
+            txs: arctic::concurrent::Map::new(),
             tx_ids: AtomicU64::new(1), // let's reserve transaction 0 for special purposes
             next_rowid: AtomicU64::new(0), // TODO: determine this from B-Tree
             next_table_id: AtomicI64::new(-2), // table id -1 / root page 1 is always sqlite_schema.
@@ -1257,27 +1248,20 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         let begin_ts = tx.begin_ts;
 
         // HACK
-        let read_set = unsafe {
-            core::mem::transmute::<
-                &'_ arctic::concurrent::Map<u128, u64>,
-                &'static arctic::concurrent::Map<u128, u64>,
-            >(&tx.read_set)
-        };
+        let read_set = unsafe { core::mem::transmute::<_, &'static SkipSet<RowID>>(&tx.read_set) };
 
         drop(tx);
-        let mut read_set = read_set.pin();
 
         // OLD: if let Some(row_versions) = self.rows.get(&id) {
         let mut rows = self.rows.pin();
-        let id = u128::from(id);
-        if let Some(row_versions) = rows.get(id) {
+        if let Some(row_versions) = rows.get(u128::from(id)) {
             let row_versions = row_versions.read();
             if let Some(rv) = row_versions
                 .iter()
                 .rev()
                 .find(|rv| rv.is_visible_to(tx_id, begin_ts, &mut txs))
             {
-                read_set.upsert(id, 0);
+                read_set.insert(id);
                 return Ok(Some(rv.row.clone()));
             }
         }
@@ -1744,11 +1728,10 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         let mut rows = self.rows.pin();
         let mut txs = self.txs.pin();
         let tx = txs.get(tx_id).unwrap();
-        let mut ws = tx.write_set.pin();
-        let ws = ws.all();
-        for rowid in ws.entries::<false>().map(|(rowid, _)| rowid) {
+        for rowid in &tx.write_set {
+            let rowid = rowid.value();
             // OLD: if let Some(row_versions) = self.rows.get(rowid) {
-            if let Some(row_versions) = rows.get(rowid) {
+            if let Some(row_versions) = rows.get(u128::from(*rowid)) {
                 let mut row_versions = row_versions.write();
                 // Find rows that were written by this transaction.
                 // Hekaton uses oldest-to-newest order for row versions, so we reverse iterate to find the newest one
@@ -1786,7 +1769,6 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     ///
     /// * `tx_id` - The ID of the transaction to abort.
     pub fn rollback_tx(&self, tx_id: TxID, _pager: Arc<Pager>, connection: &Connection) {
-        let mut rows = self.rows.pin();
         let mut txs = self.txs.pin();
         let tx = txs.get(tx_id).unwrap();
         *connection.mv_tx.write() = None;
@@ -1799,29 +1781,27 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             self.release_exclusive_tx(&tx_id);
         }
 
-        {
-            let mut ws = tx.write_set.pin();
-            let ws = ws.all();
-            for rowid in ws.entries::<false>().map(|(rowid, _)| rowid) {
-                // OLD: if let Some(row_versions) = self.rows.get(rowid) {
-                if let Some(row_versions) = rows.get(rowid) {
-                    let mut row_versions = row_versions.write();
-                    for rv in row_versions.iter_mut() {
-                        if let Some(TxTimestampOrID::TxID(id)) = rv.begin {
-                            assert_eq!(id, tx_id);
-                            // If the transaction has aborted,
-                            // it marks all its new versions as garbage and sets their Begin
-                            // and End timestamps to infinity to make them invisible
-                            // See section 2.4: https://www.cs.cmu.edu/~15721-f24/papers/Hekaton.pdf
-                            rv.begin = None;
-                            rv.end = None;
-                        } else if rv.end == Some(TxTimestampOrID::TxID(tx_id)) {
-                            // undo deletions by this transaction
-                            rv.end = None;
-                        }
+        for rowid in &tx.write_set {
+            let rowid = rowid.value();
+            let mut rows = self.rows.pin();
+            // OLD: if let Some(row_versions) = self.rows.get(rowid) {
+            if let Some(row_versions) = rows.get(u128::from(*rowid)) {
+                let mut row_versions = row_versions.write();
+                for rv in row_versions.iter_mut() {
+                    if let Some(TxTimestampOrID::TxID(id)) = rv.begin {
+                        assert_eq!(id, tx_id);
+                        // If the transaction has aborted,
+                        // it marks all its new versions as garbage and sets their Begin
+                        // and End timestamps to infinity to make them invisible
+                        // See section 2.4: https://www.cs.cmu.edu/~15721-f24/papers/Hekaton.pdf
+                        rv.begin = None;
+                        rv.end = None;
+                    } else if rv.end == Some(TxTimestampOrID::TxID(tx_id)) {
+                        // undo deletions by this transaction
+                        rv.end = None;
                     }
-                };
-            }
+                }
+            };
         }
 
         if connection.schema.read().schema_version
