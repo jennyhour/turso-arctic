@@ -999,10 +999,14 @@ pub struct MvStore<Clock: LogicalClock> {
 impl<Clock: LogicalClock> MvStore<Clock> {
     /// Creates a new database.
     pub fn new(clock: Clock, storage: Storage) -> Self {
+        let mut rows = arctic::concurrent::Map::new();
+        rows.set_membarrier(true);
+        let mut txs = arctic::concurrent::Map::new();
+        txs.set_membarrier(true);
         Self {
-            rows: arctic::concurrent::Map::new(),
+            rows,
             table_id_to_rootpage: SkipMap::from_iter(vec![(SQLITE_SCHEMA_MVCC_TABLE_ID, Some(1))]), // table id 1 / root page 1 is always sqlite_schema.
-            txs: arctic::concurrent::Map::new(),
+            txs,
             tx_ids: AtomicU64::new(1), // let's reserve transaction 0 for special purposes
             next_rowid: AtomicU64::new(0), // TODO: determine this from B-Tree
             next_table_id: AtomicI64::new(-2), // table id -1 / root page 1 is always sqlite_schema.
