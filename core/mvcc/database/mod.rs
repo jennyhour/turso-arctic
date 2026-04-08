@@ -467,8 +467,10 @@ impl<Clock: LogicalClock> StateTransition for CommitStateMachine<Clock> {
                 let end_ts = mvcc_store.get_timestamp();
                 // NOTICE: the first shadowed tx keeps the entry alive in the map
                 // for the duration of this whole function, which is important for correctness!
-                let mut txs = mvcc_store.txs.pin();
-                let tx = txs.get(self.tx_id).ok_or(LimboError::TxTerminated)?;
+                let tx = mvcc_store
+                    .txs
+                    .get(self.tx_id)
+                    .ok_or(LimboError::TxTerminated)?;
                 match tx.state.load() {
                     TransactionState::Terminated => {
                         return Err(LimboError::TxTerminated);
@@ -578,7 +580,7 @@ impl<Clock: LogicalClock> StateTransition for CommitStateMachine<Clock> {
                     }
                     // mvcc_store.remove_tx(self.tx_id);
                     drop(tx);
-                    txs.remove(self.tx_id);
+                    mvcc_store.txs.remove(self.tx_id);
                     mvcc_store.blocking_checkpoint_lock.unlock();
 
                     self.finalize(mvcc_store)?;
@@ -593,14 +595,12 @@ impl<Clock: LogicalClock> StateTransition for CommitStateMachine<Clock> {
                     // A non-CONCURRENT transaction is holding the exclusive lock, we must abort.
                     return Err(LimboError::WriteWriteConflict);
                 }
-                let mut txs = mvcc_store.txs.pin();
                 for id in &self.write_set {
                     // OLD (RowID-keyed SkipMap path):
                     // if let Some(row_versions) = mvcc_store.rows.get(id) {
                     // NEW: rows SkipMap is keyed by packed u128 RowID
                     let packed_id = u128::from(*id);
-                    let mut rows = mvcc_store.rows.pin();
-                    if let Some(row_versions) = rows.get(packed_id) {
+                    if let Some(row_versions) = mvcc_store.rows.get(packed_id) {
                         let mut row_versions = row_versions.write();
                         for row_version in row_versions.iter_mut() {
                             if let Some(TxTimestampOrID::TxID(id)) = row_version.begin {
@@ -609,7 +609,7 @@ impl<Clock: LogicalClock> StateTransition for CommitStateMachine<Clock> {
                                     // See diagram on page 299: https://www.cs.cmu.edu/~15721-f24/papers/Hekaton.pdf
                                     row_version.begin = Some(TxTimestampOrID::Timestamp(*end_ts));
                                     MvStore::<Clock>::insert_version_raw(
-                                        &mut txs,
+                                        &mvcc_store.txs,
                                         &mut log_record.row_versions,
                                         row_version.clone(),
                                     ); // FIXME: optimize cloning out
@@ -625,7 +625,7 @@ impl<Clock: LogicalClock> StateTransition for CommitStateMachine<Clock> {
                                     // See diagram on page 299: https://www.cs.cmu.edu/~15721-f24/papers/Hekaton.pdf
                                     row_version.end = Some(TxTimestampOrID::Timestamp(*end_ts));
                                     MvStore::<Clock>::insert_version_raw(
-                                        &mut txs,
+                                        &mvcc_store.txs,
                                         &mut log_record.row_versions,
                                         row_version.clone(),
                                     ); // FIXME: optimize cloning out
@@ -689,8 +689,7 @@ impl<Clock: LogicalClock> StateTransition for CommitStateMachine<Clock> {
                     let schema = connection.schema.read().clone();
                     connection.db.update_schema_if_newer(schema);
                 }
-                let mut txs = mvcc_store.txs.pin();
-                let tx_unlocked = txs.get(self.tx_id).unwrap();
+                let tx_unlocked = mvcc_store.txs.get(self.tx_id).unwrap();
                 self.header.write().replace(*tx_unlocked.header.read());
                 tracing::trace!("end_commit_logical_log(tx_id={})", self.tx_id);
                 self.commit_coordinator.pager_commit_lock.unlock();
@@ -698,8 +697,7 @@ impl<Clock: LogicalClock> StateTransition for CommitStateMachine<Clock> {
                 return Ok(TransitionResult::Continue);
             }
             CommitState::CommitEnd { end_ts } => {
-                let mut txs = mvcc_store.txs.pin();
-                let tx_unlocked = txs.get(self.tx_id).unwrap();
+                let tx_unlocked = mvcc_store.txs.get(self.tx_id).unwrap();
                 tx_unlocked
                     .state
                     .store(TransactionState::Committed(*end_ts));
@@ -727,7 +725,7 @@ impl<Clock: LogicalClock> StateTransition for CommitStateMachine<Clock> {
                 // TODO: test that reproduces this failure, and then a fix
                 // mvcc_store.remove_tx(self.tx_id);
                 drop(tx_unlocked);
-                txs.remove(self.tx_id);
+                mvcc_store.txs.remove(self.tx_id);
                 mvcc_store.blocking_checkpoint_lock.unlock();
 
                 if mvcc_store.is_exclusive_tx(&self.tx_id) {
@@ -999,10 +997,10 @@ pub struct MvStore<Clock: LogicalClock> {
 impl<Clock: LogicalClock> MvStore<Clock> {
     /// Creates a new database.
     pub fn new(clock: Clock, storage: Storage) -> Self {
-        let mut rows = arctic::concurrent::Map::new();
-        rows.set_membarrier(true);
-        let mut txs = arctic::concurrent::Map::new();
-        txs.set_membarrier(true);
+        let mut rows = arctic::concurrent::Map::<_, _, arctic::concurrent::smr::Hazard>::new();
+        rows.smr_mut().set_membarrier(true);
+        let mut txs = arctic::concurrent::Map::<_, _, arctic::concurrent::smr::Hazard>::new();
+        txs.smr_mut().set_membarrier(true);
         Self {
             rows,
             table_id_to_rootpage: SkipMap::from_iter(vec![(SQLITE_SCHEMA_MVCC_TABLE_ID, Some(1))]), // table id 1 / root page 1 is always sqlite_schema.
@@ -1123,9 +1121,8 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     ///
     pub fn insert(&self, tx_id: TxID, row: Row) -> Result<()> {
         tracing::trace!("insert(tx_id={}, row.id={:?})", tx_id, row.id);
-        let mut rows = self.rows.pin();
-        let mut txs = self.txs.pin();
-        let tx = txs
+        let tx = self
+            .txs
             .get(tx_id)
             .ok_or(LimboError::NoSuchTransactionID(tx_id.to_string()))?;
         assert_eq!(tx.state, TransactionState::Active);
@@ -1137,7 +1134,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         };
         tx.insert_to_write_set(id);
         drop(tx);
-        Self::insert_version(&mut rows, &mut txs, id, row_version);
+        Self::insert_version(&self.rows, &self.txs, id, row_version);
         Ok(())
     }
 
@@ -1193,13 +1190,12 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     pub fn delete(&self, tx_id: TxID, id: RowID) -> Result<bool> {
         tracing::trace!("delete(tx_id={}, id={:?})", tx_id, id);
         // OLD: let row_versions_opt = self.rows.get(&id);
-        let mut rows = self.rows.pin();
-        let mut txs = self.txs.pin();
-        let row_versions_opt = rows.get(u128::from(id));
+        let row_versions_opt = self.rows.get(u128::from(id));
         if let Some(ref row_versions) = row_versions_opt {
             let mut row_versions = row_versions.write();
             for rv in row_versions.iter_mut().rev() {
-                let tx = txs
+                let tx = self
+                    .txs
                     .get(tx_id)
                     .ok_or(LimboError::NoSuchTransactionID(tx_id.to_string()))?;
                 assert_eq!(tx.state, TransactionState::Active);
@@ -1208,10 +1204,10 @@ impl<Clock: LogicalClock> MvStore<Clock> {
                 let begin_ts = tx.begin_ts;
                 drop(tx);
 
-                if !rv.is_visible_to(tx_id, begin_ts, &mut txs) {
+                if !rv.is_visible_to(tx_id, begin_ts, &self.txs) {
                     continue;
                 }
-                if is_write_write_conflict(&mut txs, tx_id, rv) {
+                if is_write_write_conflict(&self.txs, tx_id, rv) {
                     drop(row_versions);
                     drop(row_versions_opt);
                     return Err(LimboError::WriteWriteConflict);
@@ -1220,7 +1216,8 @@ impl<Clock: LogicalClock> MvStore<Clock> {
                 rv.end = Some(TxTimestampOrID::TxID(tx_id));
                 drop(row_versions);
                 drop(row_versions_opt);
-                let tx = txs
+                let tx = self
+                    .txs
                     .get(tx_id)
                     .ok_or(LimboError::NoSuchTransactionID(tx_id.to_string()))?;
                 tx.insert_to_write_set(id);
@@ -1246,8 +1243,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     /// and `None` otherwise.
     pub fn read(&self, tx_id: TxID, id: RowID) -> Result<Option<Row>> {
         tracing::trace!("read(tx_id={}, id={:?})", tx_id, id);
-        let mut txs = self.txs.pin();
-        let tx = txs.get(tx_id).unwrap();
+        let tx = self.txs.get(tx_id).unwrap();
         assert_eq!(tx.state, TransactionState::Active);
         let begin_ts = tx.begin_ts;
 
@@ -1257,13 +1253,12 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         drop(tx);
 
         // OLD: if let Some(row_versions) = self.rows.get(&id) {
-        let mut rows = self.rows.pin();
-        if let Some(row_versions) = rows.get(u128::from(id)) {
+        if let Some(row_versions) = self.rows.get(u128::from(id)) {
             let row_versions = row_versions.read();
             if let Some(rv) = row_versions
                 .iter()
                 .rev()
-                .find(|rv| rv.is_visible_to(tx_id, begin_ts, &mut txs))
+                .find(|rv| rv.is_visible_to(tx_id, begin_ts, &self.txs))
             {
                 read_set.insert(id);
                 return Ok(Some(rv.row.clone()));
@@ -1276,10 +1271,9 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     pub fn scan_row_ids(&self) -> Result<Vec<RowID>> {
         tracing::trace!("scan_row_ids");
         // OLD: let keys = self.rows.iter().map(|entry| *entry.key());
-        let mut binding = self.rows.pin();
-        let rows = binding.all();
+        let rows = self.rows.all();
         let keys = rows
-            .entries::<false>()
+            .entries::<arctic::Ascend>()
             .map(|(row_id, _)| RowID::from(row_id));
         Ok(keys.collect())
     }
@@ -1318,10 +1312,9 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         //     .into_iter()
         //     .for_each(|(key, value)| bucket.push(RowID::from(*key)));
 
-        let mut rows = self.rows.pin();
-        if let Some(prefix) = rows.range(start_id, end_id) {
+        if let Some(prefix) = self.rows.range(start_id..=end_id) {
             prefix
-                .entries::<false>()
+                .entries::<arctic::Ascend>()
                 .take(max_items as usize)
                 // OLD: .for_each(|entry| bucket.push(*entry.key()));
                 .for_each(|(key, _value)| bucket.push(RowID::from(key)));
@@ -1341,7 +1334,6 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             table_id,
             start,
         );
-        let mut rows = self.rows.pin();
         // OLD: let min_bound = RowID { table_id, row_id: start };
         let min_bound: u128 = RowID {
             table_id,
@@ -1356,13 +1348,12 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         }
         .into();
 
-        let mut txs = self.txs.pin();
-        let tx = txs.get(tx_id).unwrap();
+        let tx = self.txs.get(tx_id).unwrap();
         let begin_ts = tx.begin_ts;
         drop(tx);
 
-        let rows = rows.range(min_bound, max_bound)?;
-        let mut rows = rows.entries::<false>();
+        let rows = self.rows.range(min_bound..=max_bound)?;
+        let mut rows = rows.entries::<arctic::Ascend>();
         loop {
             // We are moving forward, so if a row was deleted we just need to skip it. Therefore, we need
             // to loop either until we find a row that is not deleted or until we reach the end of the table.
@@ -1371,7 +1362,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
 
             // We found a row, let's check if it's visible to the transaction.
             if let Some(visible_row) =
-                Self::find_last_visible_version(tx_id, begin_ts, row, &mut txs)
+                Self::find_last_visible_version(tx_id, begin_ts, row, &self.txs)
             {
                 return Some(visible_row);
             }
@@ -1391,20 +1382,18 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             row_id,
         );
 
-        let mut txs = self.txs.pin();
-        let tx = txs.get(tx_id).unwrap();
+        let tx = self.txs.get(tx_id).unwrap();
         let begin_ts = tx.begin_ts;
         drop(tx);
         // OLD: let versions = self.rows.get(&RowID { table_id, row_id });
-        let mut rows = self.rows.pin();
-        let versions = rows.get(u128::from(RowID { table_id, row_id }));
+        let versions = self.rows.get(u128::from(RowID { table_id, row_id }));
         if versions.is_none() {
             return RowVersionState::NotFound;
         }
         let versions = versions.unwrap();
         let versions = versions.read();
         let last_version = versions.last().unwrap();
-        if last_version.is_visible_to(tx_id, begin_ts, &mut txs) {
+        if last_version.is_visible_to(tx_id, begin_ts, &self.txs) {
             RowVersionState::LiveVersion
         } else {
             RowVersionState::Deleted
@@ -1419,7 +1408,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             u128,
             &parking_lot::lock_api::RwLock<parking_lot::RawRwLock, Vec<RowVersion>>,
         ),
-        txs: &mut arctic::concurrent::MapRef<TxID, Box<Transaction>>,
+        txs: &arctic::concurrent::Map<TxID, Box<Transaction>>,
     ) -> Option<RowID> {
         row.1
             .read()
@@ -1431,15 +1420,14 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     }
 
     pub fn contains(&self, id: RowID, tx_id: TxID) -> bool {
-        let mut txs = self.txs.pin();
-        let tx = txs.get(tx_id).unwrap();
+        let tx = self.txs.get(tx_id).unwrap();
         let begin_ts = tx.begin_ts;
         drop(tx);
 
         let id = u128::from(id);
-        let mut rows = self.rows.pin();
-        rows.get(id)
-            .and_then(|row| Self::find_last_visible_version(tx_id, begin_ts, (id, &row), &mut txs))
+        self.rows
+            .get(id)
+            .and_then(|row| Self::find_last_visible_version(tx_id, begin_ts, (id, &row), &self.txs))
             .is_some()
     }
 
@@ -1451,8 +1439,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     ) -> Option<RowID> {
         tracing::trace!("seek_rowid(bound={:?}, lower_bound={})", bound, lower_bound,);
 
-        let mut txs = self.txs.pin();
-        let tx = txs.get(tx_id).unwrap();
+        let tx = self.txs.get(tx_id).unwrap();
         let begin_ts = tx.begin_ts;
         drop(tx);
 
@@ -1492,28 +1479,27 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             Bound::Unbounded => unreachable!(),
         };
 
-        let mut rows = self.rows.pin();
         let res = if lower_bound {
-            rows.range(packed, u128::MAX).and_then(|prefix| {
-                let mut iter = prefix.entries::<false>();
+            self.rows.range(packed..).and_then(|prefix| {
+                let mut iter = prefix.entries::<arctic::Ascend>();
                 let mut entry = iter.next()?;
 
                 if !is_included && entry.0 == packed {
                     entry = iter.next()?;
                 }
 
-                Self::find_last_visible_version(tx_id, begin_ts, entry, &mut txs)
+                Self::find_last_visible_version(tx_id, begin_ts, entry, &self.txs)
             })
         } else {
-            rows.range(0u128, packed).and_then(|prefix| {
-                let mut iter = prefix.entries::<true>();
+            self.rows.range(..=packed).and_then(|prefix| {
+                let mut iter = prefix.entries::<arctic::Descend>();
                 let mut entry = iter.next()?;
 
                 if !is_included && entry.0 == packed {
                     entry = iter.next()?;
                 }
 
-                Self::find_last_visible_version(tx_id, begin_ts, entry, &mut txs)
+                Self::find_last_visible_version(tx_id, begin_ts, entry, &self.txs)
             })
         };
 
@@ -1541,15 +1527,14 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             return Err(LimboError::Busy);
         }
         let unlock = || self.blocking_checkpoint_lock.unlock();
-        let mut txs = self.txs.pin();
         let tx_id = maybe_existing_tx_id.unwrap_or_else(|| self.get_tx_id());
         let begin_ts = if let Some(tx_id) = maybe_existing_tx_id {
-            txs.get(tx_id).unwrap().begin_ts
+            self.txs.get(tx_id).unwrap().begin_ts
         } else {
             self.get_timestamp()
         };
 
-        if let Some(tx) = txs.get(tx_id) {
+        if let Some(tx) = self.txs.get(tx_id) {
             if tx.begin_ts < self.last_committed_tx_ts.load(Ordering::Acquire) {
                 // Another transaction committed after this transaction's begin timestamp, do not allow exclusive lock.
                 // This mimics regular (non-CONCURRENT) sqlite transaction behavior.
@@ -1580,7 +1565,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             tx_id
         );
         tracing::debug!("begin_exclusive_tx: tx_id={} succeeded", tx_id);
-        txs.upsert(tx_id, Box::new(tx));
+        self.txs.upsert(tx_id, Box::new(tx));
         Ok(tx_id)
     }
 
@@ -1601,8 +1586,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         let header = self.get_new_transaction_database_header(&pager);
         let tx = Transaction::new(tx_id, begin_ts, header);
         tracing::trace!("begin_tx(tx_id={})", tx_id);
-        let mut txs = self.txs.pin();
-        txs.upsert(tx_id, Box::new(tx));
+        self.txs.upsert(tx_id, Box::new(tx));
 
         Ok(tx_id)
     }
@@ -1624,9 +1608,8 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         let header = self.get_new_transaction_database_header(&pager);
         let tx = Transaction::new(tx_id, begin_ts, header);
         tracing::trace!("begin_load_tx(tx_id={tx_id})");
-        let mut txs = self.txs.pin();
         assert!(
-            txs.upsert(tx_id, Box::new(tx)).is_none(),
+            self.txs.upsert(tx_id, Box::new(tx)).old().is_none(),
             "somehow we tried to call begin_load_tx twice"
         );
 
@@ -1655,8 +1638,8 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     }
 
     pub fn get_transaction_database_header(&self, tx_id: &TxID) -> DatabaseHeader {
-        let mut txs = self.txs.pin();
-        let header = txs
+        let header = self
+            .txs
             .get(*tx_id)
             .expect("transaction not found when trying to get header");
         let header = header.header.read();
@@ -1669,8 +1652,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         F: Fn(&DatabaseHeader) -> T,
     {
         if let Some(tx_id) = tx_id {
-            let mut txs = self.txs.pin();
-            let header = txs.get(*tx_id).unwrap();
+            let header = self.txs.get(*tx_id).unwrap();
             let header = header.header.read();
             tracing::debug!("with_header read: header={:?}", header);
             Ok(f(&header))
@@ -1686,8 +1668,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         F: Fn(&mut DatabaseHeader) -> T,
     {
         if let Some(tx_id) = tx_id {
-            let mut txs = self.txs.pin();
-            let header = txs.get(*tx_id).unwrap();
+            let header = self.txs.get(*tx_id).unwrap();
             let mut header = header.header.write();
             tracing::debug!("with_header_mut read: header={:?}", header);
             Ok(f(&mut header))
@@ -1729,13 +1710,11 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     /// transactions.
     pub fn commit_load_tx(&self, tx_id: TxID) {
         let end_ts = self.get_timestamp();
-        let mut rows = self.rows.pin();
-        let mut txs = self.txs.pin();
-        let tx = txs.get(tx_id).unwrap();
+        let tx = self.txs.get(tx_id).unwrap();
         for rowid in &tx.write_set {
             let rowid = rowid.value();
             // OLD: if let Some(row_versions) = self.rows.get(rowid) {
-            if let Some(row_versions) = rows.get(u128::from(*rowid)) {
+            if let Some(row_versions) = self.rows.get(u128::from(*rowid)) {
                 let mut row_versions = row_versions.write();
                 // Find rows that were written by this transaction.
                 // Hekaton uses oldest-to-newest order for row versions, so we reverse iterate to find the newest one
@@ -1773,8 +1752,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     ///
     /// * `tx_id` - The ID of the transaction to abort.
     pub fn rollback_tx(&self, tx_id: TxID, _pager: Arc<Pager>, connection: &Connection) {
-        let mut txs = self.txs.pin();
-        let tx = txs.get(tx_id).unwrap();
+        let tx = self.txs.get(tx_id).unwrap();
         *connection.mv_tx.write() = None;
         assert!(tx.state == TransactionState::Active || tx.state == TransactionState::Preparing);
         tx.state.store(TransactionState::Aborted);
@@ -1787,9 +1765,8 @@ impl<Clock: LogicalClock> MvStore<Clock> {
 
         for rowid in &tx.write_set {
             let rowid = rowid.value();
-            let mut rows = self.rows.pin();
             // OLD: if let Some(row_versions) = self.rows.get(rowid) {
-            if let Some(row_versions) = rows.get(u128::from(*rowid)) {
+            if let Some(row_versions) = self.rows.get(u128::from(*rowid)) {
                 let mut row_versions = row_versions.write();
                 for rv in row_versions.iter_mut() {
                     if let Some(TxTimestampOrID::TxID(id)) = rv.begin {
@@ -1822,7 +1799,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         // FIXME: verify that we can already remove the transaction here!
         // Maybe it's fine for snapshot isolation, but too early for serializable?
         // self.remove_tx(tx_id);
-        txs.remove(tx_id);
+        self.txs.remove(tx_id);
         self.blocking_checkpoint_lock.unlock();
     }
 
@@ -1896,9 +1873,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
         // tracing::trace!("drop_unused_row_versions() -> txs: {};", self.txs.len(),);
         let mut dropped = 0;
         let mut to_remove = Vec::new();
-        let mut rows = self.rows.pin();
-        let mut txs = self.txs.pin();
-        for (row_id, versions) in rows.all().entries::<false>() {
+        for (row_id, versions) in self.rows.all().entries::<arctic::Ascend>() {
             let mut row_versions = versions.write();
             row_versions.retain(|rv| {
                 // FIXME: should take rv.begin into account as well
@@ -1906,8 +1881,8 @@ impl<Clock: LogicalClock> MvStore<Clock> {
                     Some(TxTimestampOrID::Timestamp(version_end_ts)) => {
                         // a transaction started before this row version ended, ergo row version is needed
                         // NOTICE: O(row_versions x transactions), but also lock-free, so sounds acceptable
-                        let prefix = txs.all();
-                        prefix.values::<false>().any(|tx| {
+                        let prefix = self.txs.all();
+                        prefix.values::<arctic::Ascend>().any(|tx| {
                             // FIXME: verify!
                             match tx.state.load() {
                                 TransactionState::Active | TransactionState::Preparing => {
@@ -1920,7 +1895,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
                     // Let's skip potentially complex logic if the transafction is still
                     // active/tracked. We will drop the row version when the transaction
                     // gets garbage-collected itself, it will always happen eventually.
-                    Some(TxTimestampOrID::TxID(tx_id)) => txs.get(tx_id).is_none(),
+                    Some(TxTimestampOrID::TxID(tx_id)) => self.txs.get(tx_id).is_none(),
                     // this row version is current, ergo visible
                     None => true,
                 };
@@ -1941,19 +1916,17 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             }
         }
         for id in to_remove {
-            rows.remove(id);
+            self.rows.remove(id);
         }
         dropped
     }
 
     pub fn recover(&self) -> Result<()> {
         let tx_log = self.storage.read_tx_log()?;
-        let mut rows = self.rows.pin();
-        let mut txs = self.txs.pin();
         for record in tx_log {
             tracing::debug!("recover() -> tx_timestamp={}", record.tx_timestamp);
             for version in record.row_versions {
-                Self::insert_version(&mut rows, &mut txs, version.row.id, version);
+                Self::insert_version(&self.rows, &self.txs, version.row.id, version);
             }
             self.clock.reset(record.tx_timestamp);
         }
@@ -1963,7 +1936,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     // Extracts the begin timestamp from a transaction
     #[inline]
     fn get_begin_timestamp(
-        txs: &mut arctic::concurrent::MapRef<TxID, Box<Transaction>>,
+        txs: &arctic::concurrent::Map<TxID, Box<Transaction>>,
         ts_or_id: &Option<TxTimestampOrID>,
     ) -> u64 {
         match ts_or_id {
@@ -1985,15 +1958,16 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     /// Inserts a new row version into the database, while making sure that
     /// the row version is inserted in the correct order.
     fn insert_version(
-        rows: &mut arctic::concurrent::MapRef<u128, Box<RwLock<Vec<RowVersion>>>>,
-        txs: &mut arctic::concurrent::MapRef<TxID, Box<Transaction>>,
+        rows: &arctic::concurrent::Map<u128, Box<RwLock<Vec<RowVersion>>>>,
+        txs: &arctic::concurrent::Map<TxID, Box<Transaction>>,
         id: RowID,
         row_version: RowVersion,
     ) {
         // OLD: let versions = self.rows.get_or_insert_with(id, || RwLock::new(Vec::new()));
-        // let mut rows = self.rows.pin();
-        let (versions, _) =
-            rows.get_or_insert_with(u128::from(id), || Box::new(RwLock::new(Vec::new())));
+        let versions = match rows.insert_with(u128::from(id), Box::default) {
+            Ok(versions) => versions,
+            Err((versions, _)) => versions,
+        };
         let mut versions = versions.write();
         Self::insert_version_raw(txs, &mut versions, row_version)
     }
@@ -2001,7 +1975,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
     /// Inserts a new row version into the internal data structure for versions,
     /// while making sure that the row version is inserted in the correct order.
     pub fn insert_version_raw(
-        txs: &mut arctic::concurrent::MapRef<TxID, Box<Transaction>>,
+        txs: &arctic::concurrent::Map<TxID, Box<Transaction>>,
         versions: &mut Vec<RowVersion>,
         row_version: RowVersion,
     ) {
@@ -2071,10 +2045,9 @@ impl<Clock: LogicalClock> MvStore<Clock> {
             row_id: i64::MAX,
         });
 
-        let mut rows = self.rows.pin();
         // OLD: self.rows.upper_bound(Bound::Included(&RowID { table_id, row_id: i64::MAX }))
-        rows.range(0u128, packed).and_then(|prefix| {
-            let mut iter = prefix.entries::<true>();
+        self.rows.range(0u128..=packed).and_then(|prefix| {
+            let mut iter = prefix.entries::<arctic::Descend>();
             let (key, _value) = iter.next()?;
 
             let rowid = RowID::from(key);
@@ -2185,7 +2158,7 @@ impl<Clock: LogicalClock> MvStore<Clock> {
 /// Ref: https://www.cs.cmu.edu/~15721-f24/papers/Hekaton.pdf , page 301,
 /// 2.6. Updating a Version.
 pub(crate) fn is_write_write_conflict(
-    txs: &mut arctic::concurrent::MapRef<TxID, Box<Transaction>>,
+    txs: &arctic::concurrent::Map<TxID, Box<Transaction>>,
     tx_id: u64,
     rv: &RowVersion,
 ) -> bool {
@@ -2211,14 +2184,14 @@ impl RowVersion {
         &self,
         tx_id: u64,
         begin_ts: u64,
-        txs: &mut arctic::concurrent::MapRef<TxID, Box<Transaction>>,
+        txs: &arctic::concurrent::Map<TxID, Box<Transaction>>,
     ) -> bool {
         is_begin_visible(txs, tx_id, begin_ts, self) && is_end_visible(txs, tx_id, begin_ts, self)
     }
 }
 
 fn is_begin_visible(
-    txs: &mut arctic::concurrent::MapRef<TxID, Box<Transaction>>,
+    txs: &arctic::concurrent::Map<TxID, Box<Transaction>>,
     tx_id: u64,
     begin_ts: u64,
     rv: &RowVersion,
@@ -2249,7 +2222,7 @@ fn is_begin_visible(
 }
 
 fn is_end_visible(
-    txs: &mut arctic::concurrent::MapRef<TxID, Box<Transaction>>,
+    txs: &arctic::concurrent::Map<TxID, Box<Transaction>>,
     tx_id: u64,
     begin_ts: u64,
     row_version: &RowVersion,

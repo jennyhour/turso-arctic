@@ -3,11 +3,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "bindings/dart/rust",
+    # "bindings/dart/rust",
     "bindings/java",
     "bindings/javascript",
     "bindings/javascript/sync",
-    "bindings/python",
+    # "bindings/python",
     "bindings/rust",
     "cli",
     "core",
