@@ -3,11 +3,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "bindings/dart/rust",
+    # "bindings/dart/rust",
     "bindings/java",
     "bindings/javascript",
     "bindings/javascript/sync",
-    "bindings/python",
+    # "bindings/python",
     "bindings/rust",
     "cli",
     "core",
@@ -37,6 +37,9 @@ members = [
 exclude = [
     "perf/latency/limbo",
 ]
+
+[patch.crates-io]
+portable-atomic = { git = "https://github.com/taiki-e/portable-atomic", tag = "v1.11.1" }
 
 [workspace.package]
 version = "0.4.0-pre.2"

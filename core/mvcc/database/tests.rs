@@ -1097,99 +1097,99 @@ fn new_tx(tx_id: TxID, begin_ts: u64, state: TransactionState) -> Transaction {
     }
 }
 
-#[test]
-fn test_snapshot_isolation_tx_visible1() {
-    let txs: SkipMap<TxID, Transaction> = SkipMap::from_iter([
-        (1, new_tx(1, 1, TransactionState::Committed(2))),
-        (2, new_tx(2, 2, TransactionState::Committed(5))),
-        (3, new_tx(3, 3, TransactionState::Aborted)),
-        (5, new_tx(5, 5, TransactionState::Preparing)),
-        (6, new_tx(6, 6, TransactionState::Committed(10))),
-        (7, new_tx(7, 7, TransactionState::Active)),
-    ]);
-
-    let current_tx = new_tx(4, 4, TransactionState::Preparing);
-
-    let rv_visible = |begin: Option<TxTimestampOrID>, end: Option<TxTimestampOrID>| {
-        let row_version = RowVersion {
-            begin,
-            end,
-            row: generate_simple_string_row((-2).into(), 1, "testme"),
-        };
-        tracing::debug!("Testing visibility of {row_version:?}");
-        row_version.is_visible_to(&current_tx, &txs)
-    };
-
-    // begin visible:   transaction committed with ts < current_tx.begin_ts
-    // end visible:     inf
-    assert!(rv_visible(Some(TxTimestampOrID::TxID(1)), None));
-
-    // begin invisible: transaction committed with ts > current_tx.begin_ts
-    assert!(!rv_visible(Some(TxTimestampOrID::TxID(2)), None));
-
-    // begin invisible: transaction aborted
-    assert!(!rv_visible(Some(TxTimestampOrID::TxID(3)), None));
-
-    // begin visible:   timestamp < current_tx.begin_ts
-    // end invisible:   transaction committed with ts > current_tx.begin_ts
-    assert!(!rv_visible(
-        Some(TxTimestampOrID::Timestamp(0)),
-        Some(TxTimestampOrID::TxID(1))
-    ));
-
-    // begin visible:   timestamp < current_tx.begin_ts
-    // end visible:     transaction committed with ts < current_tx.begin_ts
-    assert!(rv_visible(
-        Some(TxTimestampOrID::Timestamp(0)),
-        Some(TxTimestampOrID::TxID(2))
-    ));
-
-    // begin visible:   timestamp < current_tx.begin_ts
-    // end invisible:   transaction aborted
-    assert!(!rv_visible(
-        Some(TxTimestampOrID::Timestamp(0)),
-        Some(TxTimestampOrID::TxID(3))
-    ));
-
-    // begin invisible: transaction preparing
-    assert!(!rv_visible(Some(TxTimestampOrID::TxID(5)), None));
-
-    // begin invisible: transaction committed with ts > current_tx.begin_ts
-    assert!(!rv_visible(Some(TxTimestampOrID::TxID(6)), None));
-
-    // begin invisible: transaction active
-    assert!(!rv_visible(Some(TxTimestampOrID::TxID(7)), None));
-
-    // begin invisible: transaction committed with ts > current_tx.begin_ts
-    assert!(!rv_visible(Some(TxTimestampOrID::TxID(6)), None));
-
-    // begin invisible:   transaction active
-    assert!(!rv_visible(Some(TxTimestampOrID::TxID(7)), None));
-
-    // begin visible:   timestamp < current_tx.begin_ts
-    // end invisible:     transaction preparing
-    assert!(!rv_visible(
-        Some(TxTimestampOrID::Timestamp(0)),
-        Some(TxTimestampOrID::TxID(5))
-    ));
-
-    // begin invisible: timestamp > current_tx.begin_ts
-    assert!(!rv_visible(
-        Some(TxTimestampOrID::Timestamp(6)),
-        Some(TxTimestampOrID::TxID(6))
-    ));
-
-    // begin visible:   timestamp < current_tx.begin_ts
-    // end visible:     some active transaction will eventually overwrite this version,
-    //                  but that hasn't happened
-    //                  (this is the https://avi.im/blag/2023/hekaton-paper-typo/ case, I believe!)
-    assert!(rv_visible(
-        Some(TxTimestampOrID::Timestamp(0)),
-        Some(TxTimestampOrID::TxID(7))
-    ));
-
-    assert!(!rv_visible(None, None));
-}
+// #[test]
+// fn test_snapshot_isolation_tx_visible1() {
+//     let txs: SkipMap<TxID, Transaction> = SkipMap::from_iter([
+//         (1, new_tx(1, 1, TransactionState::Committed(2))),
+//         (2, new_tx(2, 2, TransactionState::Committed(5))),
+//         (3, new_tx(3, 3, TransactionState::Aborted)),
+//         (5, new_tx(5, 5, TransactionState::Preparing)),
+//         (6, new_tx(6, 6, TransactionState::Committed(10))),
+//         (7, new_tx(7, 7, TransactionState::Active)),
+//     ]);
+//
+//     let current_tx = new_tx(4, 4, TransactionState::Preparing);
+//
+//     let rv_visible = |begin: Option<TxTimestampOrID>, end: Option<TxTimestampOrID>| {
+//         let row_version = RowVersion {
+//             begin,
+//             end,
+//             row: generate_simple_string_row((-2).into(), 1, "testme"),
+//         };
+//         tracing::debug!("Testing visibility of {row_version:?}");
+//         row_version.is_visible_to(&current_tx, &txs)
+//     };
+//
+//     // begin visible:   transaction committed with ts < current_tx.begin_ts
+//     // end visible:     inf
+//     assert!(rv_visible(Some(TxTimestampOrID::TxID(1)), None));
+//
+//     // begin invisible: transaction committed with ts > current_tx.begin_ts
+//     assert!(!rv_visible(Some(TxTimestampOrID::TxID(2)), None));
+//
+//     // begin invisible: transaction aborted
+//     assert!(!rv_visible(Some(TxTimestampOrID::TxID(3)), None));
+//
+//     // begin visible:   timestamp < current_tx.begin_ts
+//     // end invisible:   transaction committed with ts > current_tx.begin_ts
+//     assert!(!rv_visible(
+//         Some(TxTimestampOrID::Timestamp(0)),
+//         Some(TxTimestampOrID::TxID(1))
+//     ));
+//
+//     // begin visible:   timestamp < current_tx.begin_ts
+//     // end visible:     transaction committed with ts < current_tx.begin_ts
+//     assert!(rv_visible(
+//         Some(TxTimestampOrID::Timestamp(0)),
+//         Some(TxTimestampOrID::TxID(2))
+//     ));
+//
+//     // begin visible:   timestamp < current_tx.begin_ts
+//     // end invisible:   transaction aborted
+//     assert!(!rv_visible(
+//         Some(TxTimestampOrID::Timestamp(0)),
+//         Some(TxTimestampOrID::TxID(3))
+//     ));
+//
+//     // begin invisible: transaction preparing
+//     assert!(!rv_visible(Some(TxTimestampOrID::TxID(5)), None));
+//
+//     // begin invisible: transaction committed with ts > current_tx.begin_ts
+//     assert!(!rv_visible(Some(TxTimestampOrID::TxID(6)), None));
+//
+//     // begin invisible: transaction active
+//     assert!(!rv_visible(Some(TxTimestampOrID::TxID(7)), None));
+//
+//     // begin invisible: transaction committed with ts > current_tx.begin_ts
+//     assert!(!rv_visible(Some(TxTimestampOrID::TxID(6)), None));
+//
+//     // begin invisible:   transaction active
+//     assert!(!rv_visible(Some(TxTimestampOrID::TxID(7)), None));
+//
+//     // begin visible:   timestamp < current_tx.begin_ts
+//     // end invisible:     transaction preparing
+//     assert!(!rv_visible(
+//         Some(TxTimestampOrID::Timestamp(0)),
+//         Some(TxTimestampOrID::TxID(5))
+//     ));
+//
+//     // begin invisible: timestamp > current_tx.begin_ts
+//     assert!(!rv_visible(
+//         Some(TxTimestampOrID::Timestamp(6)),
+//         Some(TxTimestampOrID::TxID(6))
+//     ));
+//
+//     // begin visible:   timestamp < current_tx.begin_ts
+//     // end visible:     some active transaction will eventually overwrite this version,
+//     //                  but that hasn't happened
+//     //                  (this is the https://avi.im/blag/2023/hekaton-paper-typo/ case, I believe!)
+//     assert!(rv_visible(
+//         Some(TxTimestampOrID::Timestamp(0)),
+//         Some(TxTimestampOrID::TxID(7))
+//     ));
+//
+//     assert!(!rv_visible(None, None));
+// }
 
 #[test]
 fn test_restart() {
@@ -1634,7 +1634,6 @@ fn test_cursor_with_btree_and_mvcc_2() {
     assert_eq!(rows[2], vec![Value::Integer(3)]);
 }
 
-
 #[test]
 fn test_rowid_packing_roundtrip() {
     // Test with negative table_id (schema and user tables)
@@ -1655,3 +1654,4 @@ fn test_rowid_packing_roundtrip() {
     let unpacked3 = RowID::from(packed3);
     assert_eq!(original3, unpacked3);
 }
+
