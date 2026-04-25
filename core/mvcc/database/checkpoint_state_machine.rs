@@ -154,10 +154,26 @@ impl<Clock: LogicalClock> CheckpointStateMachine<Clock> {
         let mut max_timestamp = self.checkpointed_txid_max_old;
 
         // Since table ids are negative, and we want schema changes (table_id=-1) to be processed first, we iterate in reverse order.
-        // Reliance on SkipMap ordering is a bit yolo-swag fragile, but oh well.
-        for (key_u128, versions) in self.mvstore.rows.all().entries::<arctic::Descend>() {
-            // OLD: let key = entry.key();
-            let key = RowID::from(key_u128);
+        // Reliance on map ordering is a bit yolo-swag fragile, but oh well.
+        #[cfg(feature = "mvcc-original-index")]
+        let keys: Vec<RowID> = self.mvstore.rows.iter().rev().map(|entry| *entry.key()).collect();
+        #[cfg(not(feature = "mvcc-original-index"))]
+        let keys: Vec<RowID> = {
+            let rows_all = self.mvstore.rows.all();
+            rows_all
+                .entries::<arctic::Descend>()
+                .map(|(key_u128, _versions)| RowID::from(key_u128))
+                .collect()
+        };
+
+        for key in keys {
+            #[cfg(feature = "mvcc-original-index")]
+            let versions_entry = self.mvstore.rows.get(&key).unwrap();
+            #[cfg(feature = "mvcc-original-index")]
+            let versions = versions_entry.value();
+            #[cfg(not(feature = "mvcc-original-index"))]
+            let versions = self.mvstore.rows.get(u128::from(key)).unwrap();
+
             if self.destroyed_tables.contains(&key.table_id) {
                 // We won't checkpoint rows for tables that will be destroyed in this checkpoint.
                 // There's two forms of destroyed table:
@@ -484,13 +500,12 @@ impl<Clock: LogicalClock> CheckpointStateMachine<Clock> {
                     self.state = CheckpointState::DeleteRowStateMachine { write_set_index };
                 } else {
                     // This is an insert/update operation
-                    let state_machine =
-                        self.mvstore
-                            .write_row_to_pager(&row_version.row, cursor, requires_seek)?;
+                    let state_machine = self
+                        .mvstore
+                        .write_row_to_pager(&row_version.row, cursor, requires_seek)?;
                     self.write_row_state_machine = Some(state_machine);
                     self.state = CheckpointState::WriteRowStateMachine { write_set_index };
                 }
-
                 Ok(TransitionResult::Continue)
             }
 
