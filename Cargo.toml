@@ -106,7 +106,7 @@ either = { version = "1.15" }
 opt-level = 3
 
 [profile.release]
-debug = "line-tables-only"
+debug = true
 codegen-units = 1
 panic = "abort"
 lto = true
