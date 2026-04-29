@@ -32,7 +32,11 @@
 //! * Garbage collection
 
 #[cfg(feature = "arctic")]
-type TxMap = arctic::concurrent::Map<database::TxID, Box<database::Transaction>>;
+type TxMap = arctic::concurrent::Map<
+    database::TxID,
+    Box<database::Transaction>,
+    arctic::concurrent::smr::Epoch,
+>;
 
 #[cfg(not(feature = "arctic"))]
 type TxMap = crossbeam_skiplist::SkipMap<database::TxID, database::Transaction>;
@@ -106,6 +110,112 @@ macro_rules! any {
     };
 }
 
+#[cfg(feature = "arctic")]
+type RowMap = arctic::concurrent::Map<
+    u128,
+    Box<RwLock<Vec<database::RowVersion>>>,
+    arctic::concurrent::smr::Epoch,
+>;
+
+#[cfg(not(feature = "arctic"))]
+type RowMap = crossbeam_skiplist::SkipMap<database::RowID, RwLock<Vec<database::RowVersion>>>;
+
+#[cfg(feature = "arctic")]
+macro_rules! row_get {
+    ($rows:expr, $key:expr) => {{
+        $rows.get(&u128::from($key))
+    }};
+}
+
+#[cfg(not(feature = "arctic"))]
+macro_rules! row_get {
+    ($rows:expr, $key:expr) => {{
+        $rows.get(&$key)
+    }};
+}
+
+#[cfg(feature = "arctic")]
+macro_rules! row_get_or_insert_with {
+    ($rows:expr, $key:expr, $with:expr) => {{
+        match $rows.insert_with(&u128::from($key), || Box::new($with())) {
+            Ok(shared) => shared,
+            Err((shared, _)) => shared,
+        }
+    }};
+}
+
+#[cfg(not(feature = "arctic"))]
+macro_rules! row_get_or_insert_with {
+    ($rows:expr, $key:expr, $with:expr) => {{
+        $rows.get_or_insert_with($key, $with)
+    }};
+}
+
+#[cfg(feature = "arctic")]
+macro_rules! row_upper_bound {
+    ($rows:expr, $bound:expr, $with:expr) => {{
+        let (id, include) = match $bound {
+            core::ops::Bound::Included(id) => (u128::from(*id), true),
+            core::ops::Bound::Excluded(id) => (u128::from(*id), false),
+            core::ops::Bound::Unbounded => unimplemented!(),
+        };
+
+        if let Some(prefix) = $rows.range(..=id) {
+            let mut iter = prefix.entries::<arctic::Descend>();
+
+            match iter.lend() {
+                None => None,
+                Some((row_id, _)) if !include && *row_id == id => match iter.lend() {
+                    None => None,
+                    Some((row_id, row_value)) => $with((RowID::from(*row_id), row_value)),
+                },
+                Some((row_id, row_value)) => $with((RowID::from(*row_id), row_value)),
+            }
+        } else {
+            None
+        }
+    }};
+}
+
+#[cfg(not(feature = "arctic"))]
+macro_rules! row_upper_bound {
+    ($rows:expr, $bound:expr, $with:expr) => {{
+        $rows
+            .upper_bound($bound)
+            .and_then(|entry| $with((*entry.key(), entry.value())))
+    }};
+}
+
+#[cfg(feature = "arctic")]
+macro_rules! row_range {
+    ($rows:expr, $min:expr, $max:expr, $with:expr) => {{
+        if let Some(prefix) = $rows.range(u128::from($min)..=u128::from($max)) {
+            let mut output = None;
+            prefix
+                .entries::<arctic::Ascend>()
+                .for_each_internal(|(id, versions)| match $with((RowID::from(*id), versions)) {
+                    None => core::ops::ControlFlow::Continue(()),
+                    Some(out) => {
+                        output = Some(out);
+                        core::ops::ControlFlow::Break(())
+                    }
+                });
+            output
+        } else {
+            None
+        }
+    }};
+}
+
+#[cfg(not(feature = "arctic"))]
+macro_rules! row_range {
+    ($rows:expr, $min:expr, $max:expr, $with:expr) => {{
+        $rows
+            .range($min..$max)
+            .find_map(|entry| $with((*entry.key(), entry.value())))
+    }};
+}
+
 pub mod clock;
 pub mod cursor;
 pub mod database;
@@ -113,6 +223,7 @@ pub mod persistent_storage;
 
 pub use clock::LocalClock;
 pub use database::MvStore;
+use parking_lot::RwLock;
 
 #[cfg(test)]
 mod tests {

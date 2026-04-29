@@ -148,96 +148,97 @@ impl<Clock: LogicalClock> CheckpointStateMachine<Clock> {
     ///    * The row is a delete AND it exists in the database file already.
     ///      If the row didn't exist in the database file and was deleted, we can simply not write it.
     fn collect_committed_versions(&mut self) {
-        // Keep track of the highest timestamp that will be checkpointed in the current checkpoint;
-        // This value will be used at the end of the checkpoint to update the corresponding value in
-        // the MVCC store, so that we don't checkpoint the same row versions again on the next checkpoint.
-        let mut max_timestamp = self.checkpointed_txid_max_old;
+        todo!()
+        // // Keep track of the highest timestamp that will be checkpointed in the current checkpoint;
+        // // This value will be used at the end of the checkpoint to update the corresponding value in
+        // // the MVCC store, so that we don't checkpoint the same row versions again on the next checkpoint.
+        // let mut max_timestamp = self.checkpointed_txid_max_old;
 
-        // Since table ids are negative, and we want schema changes (table_id=-1) to be processed first, we iterate in reverse order.
-        // Reliance on SkipMap ordering is a bit yolo-swag fragile, but oh well.
-        for entry in self.mvstore.rows.iter().rev() {
-            let key = entry.key();
-            if self.destroyed_tables.contains(&key.table_id) {
-                // We won't checkpoint rows for tables that will be destroyed in this checkpoint.
-                // There's two forms of destroyed table:
-                // 1. A non-checkpointed table that was created in the logical log and then destroyed. We don't need to do anything about this table in the pager/btree layer.
-                // 2. A checkpointed table that was destroyed in the logical log. We need to destroy the btree in the pager/btree layer.
-                continue;
-            }
+        // // Since table ids are negative, and we want schema changes (table_id=-1) to be processed first, we iterate in reverse order.
+        // // Reliance on SkipMap ordering is a bit yolo-swag fragile, but oh well.
+        // for entry in self.mvstore.rows.iter().rev() {
+        //     let key = entry.key();
+        //     if self.destroyed_tables.contains(&key.table_id) {
+        //         // We won't checkpoint rows for tables that will be destroyed in this checkpoint.
+        //         // There's two forms of destroyed table:
+        //         // 1. A non-checkpointed table that was created in the logical log and then destroyed. We don't need to do anything about this table in the pager/btree layer.
+        //         // 2. A checkpointed table that was destroyed in the logical log. We need to destroy the btree in the pager/btree layer.
+        //         continue;
+        //     }
 
-            let row_versions = entry.value().read();
+        //     let row_versions = entry.value().read();
 
-            let mut version_to_checkpoint = None;
-            let mut exists_in_db_file = false;
-            for version in row_versions.iter() {
-                if let Some(TxTimestampOrID::Timestamp(ts)) = version.begin {
-                    //TODO: garbage collect row versions after checkpointing.
-                    if ts > self.checkpointed_txid_max_old {
-                        version_to_checkpoint = Some(version);
-                    } else {
-                        exists_in_db_file = true;
-                    }
-                }
-            }
+        //     let mut version_to_checkpoint = None;
+        //     let mut exists_in_db_file = false;
+        //     for version in row_versions.iter() {
+        //         if let Some(TxTimestampOrID::Timestamp(ts)) = version.begin {
+        //             //TODO: garbage collect row versions after checkpointing.
+        //             if ts > self.checkpointed_txid_max_old {
+        //                 version_to_checkpoint = Some(version);
+        //             } else {
+        //                 exists_in_db_file = true;
+        //             }
+        //         }
+        //     }
 
-            if let Some(version) = version_to_checkpoint {
-                let is_delete = version.end.is_some();
-                if let Some(TxTimestampOrID::Timestamp(ts)) = version.begin {
-                    max_timestamp = max_timestamp.max(ts);
-                }
+        //     if let Some(version) = version_to_checkpoint {
+        //         let is_delete = version.end.is_some();
+        //         if let Some(TxTimestampOrID::Timestamp(ts)) = version.begin {
+        //             max_timestamp = max_timestamp.max(ts);
+        //         }
 
-                // Only write the row to the B-tree if it is not a delete, or if it is a delete and it exists in
-                // the database file.
-                if !is_delete || exists_in_db_file {
-                    let mut special_write = None;
+        //         // Only write the row to the B-tree if it is not a delete, or if it is a delete and it exists in
+        //         // the database file.
+        //         if !is_delete || exists_in_db_file {
+        //             let mut special_write = None;
 
-                    if version.row.id.table_id == SQLITE_SCHEMA_MVCC_TABLE_ID {
-                        let row_data = ImmutableRecord::from_bin_record(version.row.data.clone());
-                        let mut record_cursor = RecordCursor::new();
-                        record_cursor.parse_full_header(&row_data).unwrap();
-                        if let ValueRef::Integer(root_page) =
-                            record_cursor.get_value(&row_data, 3).unwrap()
-                        {
-                            if is_delete {
-                                let table_id = self
-                                    .mvstore
-                                    .table_id_to_rootpage
-                                    .iter()
-                                    .find(|entry| {
-                                        entry.value().is_some_and(|r| r == root_page as u64)
-                                    })
-                                    .map(|entry| *entry.key())
-                                    .unwrap(); // This assumes a valid mapping exists.
-                                self.destroyed_tables.insert(table_id);
+        //             if version.row.id.table_id == SQLITE_SCHEMA_MVCC_TABLE_ID {
+        //                 let row_data = ImmutableRecord::from_bin_record(version.row.data.clone());
+        //                 let mut record_cursor = RecordCursor::new();
+        //                 record_cursor.parse_full_header(&row_data).unwrap();
+        //                 if let ValueRef::Integer(root_page) =
+        //                     record_cursor.get_value(&row_data, 3).unwrap()
+        //                 {
+        //                     if is_delete {
+        //                         let table_id = self
+        //                             .mvstore
+        //                             .table_id_to_rootpage
+        //                             .iter()
+        //                             .find(|entry| {
+        //                                 entry.value().is_some_and(|r| r == root_page as u64)
+        //                             })
+        //                             .map(|entry| *entry.key())
+        //                             .unwrap(); // This assumes a valid mapping exists.
+        //                         self.destroyed_tables.insert(table_id);
 
-                                // We might need to create or destroy a B-tree in the pager during checkpoint if a row in root page 1 is deleted or created.
-                                special_write = Some(SpecialWrite::BTreeDestroy {
-                                    table_id,
-                                    root_page: root_page as u64,
-                                    num_columns: version.row.column_count,
-                                });
-                            } else if !exists_in_db_file {
-                                let table_id = MVTableId::from(root_page);
-                                special_write = Some(SpecialWrite::BTreeCreate { table_id });
-                            }
-                        }
-                    }
+        //                         // We might need to create or destroy a B-tree in the pager during checkpoint if a row in root page 1 is deleted or created.
+        //                         special_write = Some(SpecialWrite::BTreeDestroy {
+        //                             table_id,
+        //                             root_page: root_page as u64,
+        //                             num_columns: version.row.column_count,
+        //                         });
+        //                     } else if !exists_in_db_file {
+        //                         let table_id = MVTableId::from(root_page);
+        //                         special_write = Some(SpecialWrite::BTreeCreate { table_id });
+        //                     }
+        //                 }
+        //             }
 
-                    self.write_set.push((version.clone(), special_write));
-                }
-            }
-        }
-        // Writing in ascending order of rowid gives us a better chance of using balance-quick algorithm
-        // in case of an insert-heavy checkpoint.
-        self.write_set.sort_by_key(|version| {
-            (
-                // Sort by table_id descending (schema changes first)
-                std::cmp::Reverse(version.0.row.id.table_id),
-                // Then by row_id ascending
-                version.0.row.id.row_id,
-            )
-        });
-        self.checkpointed_txid_max_new = max_timestamp;
+        //             self.write_set.push((version.clone(), special_write));
+        //         }
+        //     }
+        // }
+        // // Writing in ascending order of rowid gives us a better chance of using balance-quick algorithm
+        // // in case of an insert-heavy checkpoint.
+        // self.write_set.sort_by_key(|version| {
+        //     (
+        //         // Sort by table_id descending (schema changes first)
+        //         std::cmp::Reverse(version.0.row.id.table_id),
+        //         // Then by row_id ascending
+        //         version.0.row.id.row_id,
+        //     )
+        // });
+        // self.checkpointed_txid_max_new = max_timestamp;
     }
 
     /// Get the current row version to write to the B-tree
