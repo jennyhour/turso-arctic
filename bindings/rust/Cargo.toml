@@ -16,6 +16,7 @@ experimental_indexes = []
 antithesis = ["turso_core/antithesis"]
 tracing_release = ["turso_core/tracing_release"]
 mimalloc = ["dep:mimalloc"]
+arctic = ["turso_core/arctic"]
 
 [dependencies]
 turso_core = { workspace = true, features = ["io_uring"] }

@@ -31,6 +31,81 @@
 //! * Optimistic reads and writes
 //! * Garbage collection
 
+#[cfg(feature = "arctic")]
+type TxMap = arctic::concurrent::Map<database::TxID, Box<database::Transaction>>;
+
+#[cfg(not(feature = "arctic"))]
+type TxMap = crossbeam_skiplist::SkipMap<database::TxID, database::Transaction>;
+
+#[cfg(feature = "arctic")]
+macro_rules! value {
+    ($expr:expr) => {{
+        use ::core::ops::Deref as _;
+        $expr.deref()
+    }};
+}
+
+#[cfg(not(feature = "arctic"))]
+macro_rules! value {
+    ($expr:expr) => {
+        $expr.value()
+    };
+}
+
+#[cfg(feature = "arctic")]
+macro_rules! insert {
+    ($txs:expr, $key:expr, $tx:expr) => {{
+        $txs.upsert(&$key, Box::new($tx))
+    }};
+}
+
+#[cfg(not(feature = "arctic"))]
+macro_rules! insert {
+    ($txs:expr, $key:expr, $tx:expr) => {{
+        $txs.insert($key, $tx)
+    }};
+}
+
+#[cfg(feature = "arctic")]
+macro_rules! contains {
+    ($txs:expr, $key:expr) => {{
+        $txs.get($key).is_some()
+    }};
+}
+
+#[cfg(not(feature = "arctic"))]
+macro_rules! contains {
+    ($txs:expr, $key:expr) => {{
+        $txs.contains_key($key)
+    }};
+}
+
+#[cfg(feature = "arctic")]
+macro_rules! any {
+    ($txs:expr, $closure:expr) => {{
+        let mut any = false;
+        $txs.all()
+            .values::<arctic::Ascend>()
+            .for_each_internal(|value| {
+                use ::core::ops::Deref as _;
+                if $closure(value.deref()) {
+                    any = true;
+                    core::ops::ControlFlow::Break(())
+                } else {
+                    core::ops::ControlFlow::Continue(())
+                }
+            });
+        any
+    }};
+}
+
+#[cfg(not(feature = "arctic"))]
+macro_rules! any {
+    ($txs:expr, $closure:expr) => {
+        $txs.iter().any(|entry| $closure(entry.value()))
+    };
+}
+
 pub mod clock;
 pub mod cursor;
 pub mod database;
