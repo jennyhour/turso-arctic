@@ -216,6 +216,7 @@ version = "0.1.0"
 source = "git+ssh://github.com/nwtnni/arctic#907103c6271c9af120a52087c63a44e4adbbe0f1"
 dependencies = [
  "crossbeam-epoch 0.9.13",
+ "libc",
  "ribbit",
  "seize",
 ]
@@ -2201,9 +2202,9 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "libc"
-version = "0.2.172"
+version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
+checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "libgit2-sys"
@@ -3493,6 +3494,7 @@ version = "0.5.1"
 source = "git+https://github.com/migopp/seize.git#863ff99645223c778ae20ec8fee5e0f20f324391"
 dependencies = [
  "libc",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

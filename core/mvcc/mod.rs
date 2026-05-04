@@ -35,7 +35,7 @@
 type TxMap = arctic::concurrent::Map<
     database::TxID,
     Box<database::Transaction>,
-    arctic::concurrent::smr::Epoch,
+    arctic::concurrent::smr::Seize,
 >;
 
 #[cfg(not(feature = "arctic"))]
@@ -114,7 +114,7 @@ macro_rules! any {
 type RowMap = arctic::concurrent::Map<
     u128,
     Box<RwLock<Vec<database::RowVersion>>>,
-    arctic::concurrent::smr::Epoch,
+    arctic::concurrent::smr::Seize,
 >;
 
 #[cfg(not(feature = "arctic"))]
