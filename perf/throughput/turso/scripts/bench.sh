@@ -1,12 +1,15 @@
 #!/bin/sh
 
-cargo build --release
+echo "index,system,threads,batch_size,compute,throughput,total,commit,insert,exists" >> turso.csv
 
-echo "system,threads,batch_size,compute,throughput"
+for iteration in $(seq 20); do
+    for threads in 1 2 4 8; do
+        for index in arctic skipmap; do
+            rm -f write_throughput_test.db*
 
-for threads in 1 2 4 8; do
-  for compute in 0 100 500 1000; do
-      rm -f write_throughput_test.db*
-      ../../../target/release/write-throughput --threads ${threads} --batch-size 100 --compute ${compute} -i 1000 --mode concurrent
-  done
+            echo -n "$index,$(perf record --freq=999 --call-graph=dwarf --output=perf.data ./write-throughput-$index --threads $threads --batch-size 100 --compute 0 -i $((100000 / $threads)) --mode concurrent)," >> turso.csv
+            perf script --addr2line=/home/cc/.cargo/bin/addr2line | /home/cc/.cargo/bin/inferno-collapse-perf > perf.collapsed
+            /home/cc/.cargo/bin/breakdown perf.collapsed turso_core::vdbe::execute::op_auto_commit turso_core::vdbe::execute::op_insert turso_core::vdbe::execute::op_not_exists >> turso.csv
+        done
+    done
 done

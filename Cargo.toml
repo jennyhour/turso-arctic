@@ -3,11 +3,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "bindings/dart/rust",
-    "bindings/java",
-    "bindings/javascript",
-    "bindings/javascript/sync",
-    "bindings/python",
+    # "bindings/dart/rust",
+    # "bindings/java",
+    # "bindings/javascript",
+    # "bindings/javascript/sync",
+    # "bindings/python",
     "bindings/rust",
     "cli",
     "core",
@@ -21,7 +21,7 @@ members = [
     "extensions/tests",
     "extensions/fuzzy",
     "macros",
-    "simulator",
+    # "simulator",
     "sqlite3",
     "stress",
     "testing/sqlite_test_ext",
@@ -32,7 +32,7 @@ members = [
     "whopper",
     "perf/throughput/turso",
     "perf/throughput/rusqlite",
-    "perf/encryption"
+    # "perf/encryption"
 ]
 exclude = [
     "perf/latency/limbo",
@@ -106,7 +106,7 @@ either = { version = "1.15" }
 opt-level = 3
 
 [profile.release]
-debug = "line-tables-only"
+debug = true
 codegen-units = 1
 panic = "abort"
 lto = true

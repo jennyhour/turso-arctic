@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [features]
 console = ["dep:console-subscriber" ,"tokio/tracing"]
+arctic = ["turso/arctic"]
 
 [dependencies]
 turso = { workspace = true }
